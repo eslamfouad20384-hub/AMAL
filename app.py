@@ -6,7 +6,7 @@ import ta
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v3.1 (DAILY + WEEKLY + MONTHLY)")
+st.title("🚀 EGX AI PRO MAX v4 (INSTITUTIONAL TARGET SYSTEM)")
 
 # =========================
 # 📌 EGX UNIVERSE
@@ -74,7 +74,7 @@ def atr(df, period=14):
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 📊 ADX (Wilder Improved)
+# 📊 ADX
 # =========================
 def adx(df, period=14):
     high = df["High"]
@@ -102,11 +102,10 @@ def adx(df, period=14):
     return dx.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 🧠 MARKET REGIME
+# 🧠 REGIME
 # =========================
 def market_regime(last):
     score = 0
-
     if last["Close"] > last["ema200"]:
         score += 1
     if last["ema20"] > last["ema50"]:
@@ -122,11 +121,10 @@ def market_regime(last):
         return "🟢 Bullish"
     elif score == 2:
         return "⚠️ Neutral"
-    else:
-        return "🔴 Bearish"
+    return "🔴 Bearish"
 
 # =========================
-# 🧠 ANALYSIS ENGINE (MULTI TIMEFRAME)
+# 🧠 PRO ANALYSIS ENGINE
 # =========================
 def analyze(df_d, df_w, df_m):
 
@@ -138,22 +136,18 @@ def analyze(df_d, df_w, df_m):
     last_w = df_w.iloc[-1]
     last_m = df_m.iloc[-1]
 
+    entry = last_d["Close"]
+
     atr_val = atr(df_d).iloc[-1]
     adx_val = adx(df_d).iloc[-1]
 
     score = 0
 
-    # ================= DAILY TREND
+    # ================= TREND
     if last_d["Close"] > last_d["ema200"]:
         score += 15
-    if last_d["ema20"] > last_d["ema50"]:
-        score += 10
-
-    # ================= WEEKLY CONFIRMATION
     if last_w["Close"] > last_w["ema200"]:
         score += 12
-
-    # ================= MONTHLY CONFIRMATION (IMPORTANT)
     if last_m["Close"] > last_m["ema200"]:
         score += 15
 
@@ -167,47 +161,66 @@ def analyze(df_d, df_w, df_m):
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 8
 
-    # ================= OBV
-    if last_d["obv"] > df_d["obv"].rolling(10).mean().iloc[-1]:
-        score += 6
-
-    # ================= VOLATILITY FILTER
-    if atr_val > last_d["Close"] * 0.01:
-        score += 6
-
-    # ================= ADX TREND STRENGTH
+    # ================= ADX
     if adx_val > 20:
         score += 10
 
-    # ================= SUPPORT ZONE
-    if last_d["Close"] <= last_d["support"] * 1.02:
-        score += 5
-
-    # ================= REGIME BONUS
     regime = market_regime(last_d)
-
     if "Strong" in regime:
         score += 6
-    elif "Bullish" in regime:
-        score += 3
 
-    # ================= FINAL SIGNAL
-    if score >= 85:
-        signal = "🔥 قوي جداً"
-    elif score >= 70:
-        signal = "🟢 فرصة قوية"
-    elif score >= 55:
-        signal = "⚠️ متابعة"
+    # ================= RISK MODEL
+    risk = atr_val / entry
+    if risk < 0.05:
+        score += 5
     else:
-        signal = "🟡 ضعيف"
+        score -= 5
 
-    return score, signal, regime, atr_val
+    # ================= TARGETS (PRO LEVEL)
+    support = last_d["support"]
+    resistance = last_d["resistance"]
+
+    sl = entry - atr_val * 1.5
+
+    # SHORT TARGET
+    tp1 = entry + atr_val * 2
+
+    # MID TARGET
+    tp2 = entry + atr_val * 4
+
+    # LONG TARGET (INSTITUTIONAL)
+    tp3 = max(
+        resistance,
+        entry + atr_val * 6,
+        entry * 1.20
+    )
+
+    # ================= PROBABILITY MODEL (simple)
+    def prob(x):
+        base = score / 100
+        dist_factor = max(0.3, 1 - abs(x - entry) / entry)
+        return round(min(0.95, base * dist_factor), 2)
+
+    return {
+        "Score": round(score,2),
+        "Signal": "🔥 قوي جداً" if score > 85 else "🟢 فرصة قوية" if score > 70 else "⚠️ متابعة",
+        "Regime": regime,
+        "Entry": round(entry,2),
+        "SL": round(sl,2),
+
+        "TP1 (Short)": round(tp1,2),
+        "TP2 (Mid)": round(tp2,2),
+        "TP3 (Long)": round(tp3,2),
+
+        "Prob_TP1": prob(tp1),
+        "Prob_TP2": prob(tp2),
+        "Prob_TP3": prob(tp3),
+    }
 
 # =========================
-# ⚙️ PROCESSOR
+# PROCESSOR
 # =========================
 def process(symbol, daily, weekly, monthly):
-
     try:
         df_d = daily[symbol].dropna()
         df_w = weekly[symbol].dropna()
@@ -216,31 +229,17 @@ def process(symbol, daily, weekly, monthly):
         if df_d.empty or df_w.empty or df_m.empty:
             return None
 
-        score, signal, regime, atr_val = analyze(df_d, df_w, df_m)
-
-        last = df_d.iloc[-1]
-        entry = last["Close"]
-
-        sl = entry - atr_val * 1.5
-        tp = entry + (entry - sl) * 2
-
-        return {
-            "Symbol": symbol.replace(".CA",""),
-            "Score": round(score,2),
-            "Signal": signal,
-            "Regime": regime,
-            "Entry": round(entry,2),
-            "SL": round(sl,2),
-            "TP": round(tp,2)
-        }
+        result = analyze(df_d, df_w, df_m)
+        result["Symbol"] = symbol.replace(".CA","")
+        return result
 
     except:
         return None
 
 # =========================
-# 🚀 RUN ENGINE
+# RUN
 # =========================
-if st.button("🚀 RUN PRO MAX v3.1"):
+if st.button("🚀 RUN PRO MAX v4"):
 
     daily = load_data(EGX, "6mo", "1d")
     weekly = load_data(EGX, "2y", "1wk")
@@ -260,13 +259,13 @@ if st.button("🚀 RUN PRO MAX v3.1"):
         df = pd.DataFrame(results)
         df = df.sort_values("Score", ascending=False)
 
-        st.success("🔥 PRO MAX v3.1 READY")
+        st.success("🔥 INSTITUTIONAL SYSTEM READY")
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_pro_max_v3_1.csv"
+            "egx_pro_max_v4.csv"
         )
     else:
         st.warning("No signals found")
