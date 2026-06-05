@@ -209,27 +209,34 @@ def analyze(df_d, df_w, df_m):
         score -= 5
 
     # =========================
-    # 🎯 TARGET ENGINE (FINAL)
+    # 🎯 ADVANCED TARGET ENGINE V2
     # =========================
 
     support = last_d["support"]
     resistance = last_d["resistance"]
 
     volatility = atr_val / entry
+    ema_trend = (last_d["ema20"] - last_d["ema200"]) / entry
+    adx_strength = adx_val / 100
 
-    if last_d["Close"] > last_d["ema200"]:
-        trend_dir = "UP"
-        t1 = entry + atr_val * 1
-        t2 = entry + atr_val * 2
-        t3 = max(resistance, entry + atr_val * 3)
-        stop = max(support, entry - atr_val * 1.2)
+    # TP1 = scalping
+    tp1 = entry + atr_val * 0.8 if ema_trend > 0 else entry - atr_val * 0.8
+
+    # TP2 = swing
+    tp2 = entry + atr_val * (1.8 + adx_strength * 2) if ema_trend > 0 else entry - atr_val * (1.8 + adx_strength * 2)
+
+    # TP3 = trend extension
+    trend_multiplier = 3 + (adx_strength * 4) + (abs(ema_trend) * 10)
+
+    if ema_trend > 0:
+        tp3 = max(resistance, entry + atr_val * trend_multiplier)
     else:
-        trend_dir = "DOWN"
-        t1 = entry - atr_val * 1
-        t2 = entry - atr_val * 2
-        t3 = min(support, entry - atr_val * 3)
-        stop = min(resistance, entry + atr_val * 1.2)
+        tp3 = min(support, entry - atr_val * trend_multiplier)
 
+    # STOP LOSS
+    stop = entry - atr_val * (1.2 + volatility * 5) if ema_trend > 0 else entry + atr_val * (1.2 + volatility * 5)
+
+    # TIME ESTIMATION
     if volatility > 0.05:
         time_est = "1 - 3 weeks"
     elif volatility > 0.02:
@@ -237,7 +244,16 @@ def analyze(df_d, df_w, df_m):
     else:
         time_est = "2 - 4 months"
 
-    conf = ai_confidence(last_d, last_w, last_m, adx_val, atr_val)
+    # PROBABILITY MODEL
+    base_conf = ai_confidence(last_d, last_w, last_m, adx_val, atr_val)
+
+    momentum_factor = min(1.2, adx_val / 25)
+    trend_factor = 1 + abs(ema_trend) * 5
+    vol_factor = 1 - min(0.5, volatility)
+
+    tp1_prob = min(0.95, base_conf * momentum_factor * vol_factor)
+    tp2_prob = min(0.90, tp1_prob * (0.85 + adx_strength))
+    tp3_prob = min(0.85, tp2_prob * (0.75 + abs(ema_trend) * 3))
 
     return {
         "Score": round(score,2),
@@ -247,16 +263,15 @@ def analyze(df_d, df_w, df_m):
         "Entry": round(entry,2),
         "SL": round(stop,2),
 
-        "TP1": round(t1,2),
-        "TP2": round(t2,2),
-        "TP3": round(t3,2),
+        "TP1": round(tp1,2),
+        "TP2": round(tp2,2),
+        "TP3": round(tp3,2),
 
-        "Prob_TP1": round(conf,2),
-        "Prob_TP2": round(conf * 0.9,2),
-        "Prob_TP3": round(conf * 0.8,2),
+        "Prob_TP1": round(tp1_prob,2),
+        "Prob_TP2": round(tp2_prob,2),
+        "Prob_TP3": round(tp3_prob,2),
 
-        "Time_Est": time_est,
-        "Trend_Dir": trend_dir
+        "Time_Est": time_est
     }
 
 # =========================
