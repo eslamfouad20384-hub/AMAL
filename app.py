@@ -6,7 +6,7 @@ import ta
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v4 (OBV FIXED + AI ENGINE)")
+st.title("🚀 EGX AI PRO MAX v4 (AI SMART ENGINE)")
 
 # =========================
 # 📌 EGX STOCKS
@@ -53,7 +53,6 @@ def add_indicators(df):
     df["support"] = low.rolling(20).min()
     df["resistance"] = high.rolling(20).max()
 
-    # OBV
     df["obv"] = ta.volume.OnBalanceVolumeIndicator(close, vol).on_balance_volume()
 
     return df
@@ -103,6 +102,59 @@ def adx(df, period=14):
     return dx.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
+# 🧠 AI CONFIDENCE ENGINE
+# =========================
+def ai_confidence(last_d, last_w, last_m, adx_val, atr_val):
+
+    score = 0
+    total = 0
+
+    # TREND
+    total += 3
+    if last_d["Close"] > last_d["ema200"]:
+        score += 1
+    if last_w["Close"] > last_w["ema200"]:
+        score += 1
+    if last_m["Close"] > last_m["ema200"]:
+        score += 1
+
+    # MOMENTUM
+    total += 2
+    if last_d["macd"] > 0:
+        score += 1
+    if 45 < last_d["rsi"] < 65:
+        score += 1
+
+    # VOLUME
+    total += 1
+    if last_d["Volume"] > last_d["vol_ma"]:
+        score += 1
+
+    # TREND STRENGTH
+    total += 1
+    if adx_val > 20:
+        score += 1
+
+    # RISK QUALITY
+    total += 1
+    if atr_val / last_d["Close"] < 0.05:
+        score += 1
+
+    return score / total
+
+# =========================
+# 🎯 SMART PROBABILITY
+# =========================
+def smart_probability(conf, target, entry):
+
+    distance = abs(target - entry) / entry
+    distance_factor = max(0.3, 1 - distance)
+
+    prob = conf * distance_factor
+
+    return round(min(0.95, prob), 2)
+
+# =========================
 # 🧠 REGIME
 # =========================
 def market_regime(last):
@@ -125,7 +177,7 @@ def market_regime(last):
     return "🔴 هبوط"
 
 # =========================
-# 🧠 ENGINE (FIXED OBV)
+# 🧠 ENGINE
 # =========================
 def analyze(df_d, df_w, df_m):
 
@@ -144,7 +196,7 @@ def analyze(df_d, df_w, df_m):
 
     score = 0
 
-    # ================= TREND
+    # TREND
     if last_d["Close"] > last_d["ema200"]:
         score += 15
     if last_w["Close"] > last_w["ema200"]:
@@ -152,23 +204,16 @@ def analyze(df_d, df_w, df_m):
     if last_m["Close"] > last_m["ema200"]:
         score += 15
 
-    # ================= MOMENTUM
+    # MOMENTUM
     if 45 < last_d["rsi"] < 65:
         score += 8
     if last_d["macd"] > 0:
         score += 6
 
-    # ================= VOLUME
+    # VOLUME
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 8
 
-    # ================= OBV (🔥 FIXED HERE)
-    obv_ma = df_d["obv"].rolling(10).mean().iloc[-1]
-
-    if last_d["obv"] > obv_ma:
-        score += 10   # OBV CONFIRMATION (NEW IMPORTANT FACTOR)
-
-    # ================= TREND STRENGTH
     if adx_val > 20:
         score += 10
 
@@ -177,14 +222,14 @@ def analyze(df_d, df_w, df_m):
     if "قوي" in regime:
         score += 6
 
-    # ================= RISK
+    # RISK
     risk = atr_val / entry
     if risk < 0.05:
         score += 5
     else:
         score -= 5
 
-    # ================= TARGETS
+    # TARGETS
     support = last_d["support"]
     resistance = last_d["resistance"]
 
@@ -193,6 +238,9 @@ def analyze(df_d, df_w, df_m):
     tp1 = entry + atr_val * 2
     tp2 = entry + atr_val * 4
     tp3 = max(resistance, entry + atr_val * 6, entry * 1.20)
+
+    # AI CONFIDENCE
+    conf = ai_confidence(last_d, last_w, last_m, adx_val, atr_val)
 
     return {
         "Score": round(score,2),
@@ -205,6 +253,10 @@ def analyze(df_d, df_w, df_m):
         "TP1": round(tp1,2),
         "TP2": round(tp2,2),
         "TP3": round(tp3,2),
+
+        "Prob_TP1": smart_probability(conf, tp1, entry),
+        "Prob_TP2": smart_probability(conf, tp2, entry),
+        "Prob_TP3": smart_probability(conf, tp3, entry),
     }
 
 # =========================
@@ -229,7 +281,7 @@ def process(symbol, daily, weekly, monthly):
 # =========================
 # RUN
 # =========================
-if st.button("🚀 RUN AI PRO MAX v4 FIXED"):
+if st.button("🚀 RUN AI PRO MAX v4"):
 
     daily = load_data(EGX, "6mo", "1d")
     weekly = load_data(EGX, "2y", "1wk")
@@ -253,14 +305,14 @@ if st.button("🚀 RUN AI PRO MAX v4 FIXED"):
         cols = ["Symbol"] + [c for c in df.columns if c != "Symbol"]
         df = df[cols]
 
-        st.success("🔥 OBV FIXED + AI READY")
+        st.success("🔥 AI SYSTEM READY")
 
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_ai_fixed.csv"
+            "egx_ai_pro_max_v4.csv"
         )
     else:
         st.warning("No signals found")
