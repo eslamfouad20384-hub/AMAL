@@ -6,11 +6,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX SMART SCANNER PRO MAX (BEST RESULT MODE)")
+st.title("🚀 EGX SMART SCANNER PRO MAX (MULTI DATA ENGINE)")
 
 
 # =========================
-# 📦 LOAD STOCKS (SAFE)
+# 📦 LOAD STOCKS
 # =========================
 @st.cache_data(ttl=86400)
 def get_all_stocks():
@@ -45,26 +45,61 @@ def is_market_open():
 
 
 # =========================
-# 📊 DATA
+# 📊 MULTI DATA SOURCE ENGINE (FIXED)
 # =========================
-@st.cache_data(ttl=300)
 def get_data(symbol):
 
+    # =========================
+    # 🧠 1) PRIMARY SOURCE (LOCAL CSV / API)
+    # =========================
     try:
-        symbol = f"{symbol}.CA"
+        local_path = f"data/{symbol}.csv"
+        df = pd.read_csv(local_path)
 
-        df = yf.download(symbol, period="1y", interval="1d", progress=False)
+        if df is not None and len(df) > 50:
+            df.columns = [c.lower() for c in df.columns]
 
-        if df is None or df.empty:
-            return None
+            rename_map = {
+                "date": "datetime",
+                "time": "datetime",
+                "adj close": "close"
+            }
 
-        df = df.reset_index()
-        df.columns = [c.lower() for c in df.columns]
+            df = df.rename(columns=rename_map)
 
-        return df
+            return df
 
     except:
-        return None
+        pass
+
+
+    # =========================
+    # 🔁 2) FALLBACK SOURCE (YFINANCE)
+    # =========================
+    try:
+        symbol_yf = f"{symbol}.CA"
+
+        df = yf.download(
+            symbol_yf,
+            period="1y",
+            interval="1d",
+            progress=False
+        )
+
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            df.columns = [c.lower() for c in df.columns]
+
+            return df
+
+    except:
+        pass
+
+
+    # =========================
+    # ⚡ 3) SAFETY LAYER
+    # =========================
+    return None
 
 
 # =========================
@@ -115,7 +150,7 @@ def add_indicators(df):
 
 
 # =========================
-# 🧠 FILTER (NO HARD EXCLUSION)
+# 🧠 FILTER
 # =========================
 def smart_filter(df, market_open):
 
@@ -156,7 +191,7 @@ def calculate_adx(df):
 
 
 # =========================
-# 📈 ANALYZE (BEST RESULT MODE)
+# 📈 ANALYZE
 # =========================
 def analyze(df, market_open):
 
@@ -166,9 +201,6 @@ def analyze(df, market_open):
 
     adx = calculate_adx(df).iloc[-1]
 
-    # =========================
-    # 🧠 PRICE ACTION CORE
-    # =========================
     price_trend = latest["close"] / df["close"].iloc[-5] - 1
 
     if price_trend > 0:
@@ -177,14 +209,11 @@ def analyze(df, market_open):
 
     if latest["close"] <= latest["support"] * 1.06:
         score += 15
-        reasons.append("Near Support Zone")
+        reasons.append("Near Support")
 
-    # =========================
-    # 📊 INDICATORS (SOFT)
-    # =========================
     if latest["rsi"] < 50:
         score += 10
-        reasons.append("RSI Acceptable")
+        reasons.append("RSI OK")
 
     if latest["macd"] > latest["signal"]:
         score += 10
@@ -194,16 +223,10 @@ def analyze(df, market_open):
         score += 10
         reasons.append("Above VWAP")
 
-    # =========================
-    # 📈 VOLUME
-    # =========================
     if latest["volume"] > df["volume"].mean() * 0.7:
         score += 10
         reasons.append("Volume Active")
 
-    # =========================
-    # 🧠 TREND STRENGTH
-    # =========================
     if adx > 15:
         score += 10
         reasons.append("Trend Exists")
@@ -212,17 +235,11 @@ def analyze(df, market_open):
         score += 10
         reasons.append("OBV Strength")
 
-    # =========================
-    # 🔥 MARKET BOOST
-    # =========================
     if market_open:
         score += 5
     else:
         score += 8
 
-    # =========================
-    # 📊 SIGNAL (SOFT)
-    # =========================
     if score >= 70:
         signal = "🔥 فرصة قوية"
     elif score >= 55:
@@ -315,7 +332,7 @@ def process_stock(row, market_open):
 # =========================
 results = []
 
-if st.button("🚀 SCAN EGX BEST RESULT MODE"):
+if st.button("🚀 SCAN EGX MULTI SOURCE"):
 
     stocks = get_all_stocks()
 
@@ -359,28 +376,7 @@ if st.button("🚀 SCAN EGX BEST RESULT MODE"):
         st.dataframe(best_sector, use_container_width=True)
 
         csv = df_res.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download CSV", csv, "egx_best_results.csv", "text/csv")
+        st.download_button("⬇️ Download CSV", csv, "egx_multi_source.csv", "text/csv")
 
     else:
-
-        st.warning("⚠️ No strong signals → showing weakest opportunities")
-
-        fallback = []
-
-        for row in stocks.to_dict("records")[:30]:
-
-            df = get_data(row["symbol"])
-            if df is None:
-                continue
-
-            df = add_indicators(df)
-
-            signal, score, reasons = analyze(df, False)
-
-            fallback.append({
-                "Symbol": row["symbol"],
-                "Score": score,
-                "Signal": signal
-            })
-
-        st.dataframe(pd.DataFrame(fallback).sort_values("Score", ascending=False))
+        st.warning("⚠️ No results found even in multi-source mode")
