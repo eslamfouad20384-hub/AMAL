@@ -6,7 +6,7 @@ import ta
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v3.1 (MULTI-TIMEFRAME PRO)")
+st.title("🚀 EGX AI PRO MAX v3.2 (DEBUG + BALANCED)")
 
 # =========================
 # 📌 EGX UNIVERSE
@@ -17,7 +17,7 @@ EGX = [
 ]
 
 # =========================
-# 📊 DATA
+# 📊 DATA LOADER
 # =========================
 @st.cache_data(ttl=3600)
 def load_data(symbols, period, interval):
@@ -120,7 +120,7 @@ def market_regime(last):
     return "🔴 Bearish"
 
 # =========================
-# ANALYZE ENGINE v3.1
+# ANALYZE ENGINE v3.2
 # =========================
 def analyze(df_d, df_w, df_m):
 
@@ -135,7 +135,7 @@ def analyze(df_d, df_w, df_m):
     atr_val = atr(df_d).iloc[-1]
     adx_val = adx(df_d).iloc[-1]
 
-    score = 0
+    score = 20  # 🔥 base score (حل مشكلة No signals)
 
     # ================= TREND
     if last_d["Close"] > last_d["ema200"]:
@@ -144,7 +144,7 @@ def analyze(df_d, df_w, df_m):
         score += 10
 
     # ================= MOMENTUM
-    if 45 < last_d["rsi"] < 65:
+    if 40 < last_d["rsi"] < 70:
         score += 10
     if last_d["macd"] > 0:
         score += 8
@@ -153,57 +153,57 @@ def analyze(df_d, df_w, df_m):
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 10
 
-    obv_slope = df_d["obv"].diff().iloc[-1]
-    if obv_slope > 0:
+    if df_d["obv"].diff().iloc[-1] > 0:
         score += 6
 
-    # ================= VOLATILITY (fixed)
-    if atr_val / last_d["Close"] > 0.008:
-        score += 7
+    # ================= VOLATILITY
+    if atr_val / last_d["Close"] > 0.006:
+        score += 6
 
     # ================= TREND STRENGTH
-    if adx_val > 20:
-        score += 12
+    if adx_val > 18:
+        score += 10
 
     # ================= SUPPORT
-    if last_d["Close"] <= last_d["support"] * 1.02:
+    if last_d["Close"] <= last_d["support"] * 1.03:
         score += 5
 
     # ================= WEEKLY CONFIRMATION
     if last_w["Close"] > last_w["ema200"]:
-        score += 10
+        score += 8
 
-    # ================= MONTHLY CONFIRMATION (NEW)
+    # ================= MONTHLY CONFIRMATION
     if last_m["Close"] > last_m["ema200"]:
-        score += 12
-
-    # ================= REGIME BONUS
-    regime = market_regime(last_d)
-    if "Strong" in regime:
         score += 6
+
+    # ================= REGIME
+    regime = market_regime(last_d)
+
+    if "Strong" in regime:
+        score += 5
     elif "Bullish" in regime:
         score += 3
 
-    # ================= NO TRADE ZONE
-    if adx_val < 15:
-        return score, "⛔ No Trade", regime, atr_val
-
-    # ================= SIGNAL
-    if score >= 85:
-        signal = "🔥 قوي جداً"
-    elif score >= 70:
-        signal = "🟢 فرصة قوية"
-    elif score >= 55:
-        signal = "⚠️ متابعة"
+    # ================= NO TRADE ZONE (خفيف مش قفل)
+    if adx_val < 12:
+        signal = "⛔ Weak Market"
     else:
-        signal = "🟡 ضعيف"
+        # ================= SIGNAL
+        if score >= 80:
+            signal = "🔥 قوي جداً"
+        elif score >= 65:
+            signal = "🟢 فرصة قوية"
+        elif score >= 50:
+            signal = "⚠️ متابعة"
+        else:
+            signal = "🟡 ضعيف"
 
-    return score, signal, regime, atr_val
+    return score, signal, regime, atr_val, adx_val
 
 # =========================
 # PROCESS
 # =========================
-def process(symbol, daily, weekly, monthly):
+def process(symbol, daily, weekly, monthly, debug=False):
 
     try:
         df_d = daily[symbol].dropna()
@@ -213,30 +213,50 @@ def process(symbol, daily, weekly, monthly):
         if len(df_d) < 200:
             return None
 
-        score, signal, regime, atr_val = analyze(df_d, df_w, df_m)
+        score, signal, regime, atr_val, adx_val = analyze(df_d, df_w, df_m)
 
-        entry = df_d.iloc[-1]["Close"]
+        last = df_d.iloc[-1]
+        entry = last["Close"]
 
         sl = entry - atr_val * 1.5
         tp = entry + atr_val * 3
 
-        return {
+        result = {
             "Symbol": symbol.replace(".CA",""),
             "Score": round(score,2),
             "Signal": signal,
             "Regime": regime,
+            "ADX": round(adx_val,2),
             "Entry": round(entry,2),
             "SL": round(sl,2),
             "TP": round(tp,2)
         }
 
+        # ================= DEBUG MODE
+        if debug:
+            result.update({
+                "RSI": round(last["rsi"],2),
+                "MACD": round(last["macd"],4),
+                "ATR%": round((atr_val / entry) * 100,2),
+                "Volume OK": last["Volume"] > last["vol_ma"],
+                "EMA Trend": last["ema20"] > last["ema50"],
+                "Above EMA200": last["Close"] > last["ema200"],
+                "OBV Up": df_d["obv"].diff().iloc[-1] > 0,
+                "Weekly OK": last_w["Close"] > last_w["ema200"],
+                "Monthly OK": last_m["Close"] > last_m["ema200"],
+            })
+
+        return result
+
     except:
         return None
 
 # =========================
-# RUN
+# RUN ENGINE
 # =========================
-if st.button("🚀 RUN PRO MAX v3.1"):
+debug_mode = st.checkbox("🧠 Debug Mode")
+
+if st.button("🚀 RUN PRO MAX v3.2"):
 
     daily = load_data(EGX, "6mo", "1d")
     weekly = load_data(EGX, "2y", "1wk")
@@ -245,7 +265,10 @@ if st.button("🚀 RUN PRO MAX v3.1"):
     results = []
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = [ex.submit(process, s, daily, weekly, monthly) for s in EGX]
+        futures = [
+            ex.submit(process, s, daily, weekly, monthly, debug_mode)
+            for s in EGX
+        ]
 
         for f in futures:
             r = f.result()
@@ -255,13 +278,13 @@ if st.button("🚀 RUN PRO MAX v3.1"):
     if results:
         df = pd.DataFrame(results).sort_values("Score", ascending=False)
 
-        st.success("🔥 PRO MAX v3.1 READY")
+        st.success("🔥 PRO MAX v3.2 READY")
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_pro_max_v3_1.csv"
+            "egx_pro_max_v3_2.csv"
         )
     else:
         st.warning("No signals found")
