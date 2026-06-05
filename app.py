@@ -3,26 +3,27 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX SMART SCANNER PRO MAX (FULL FIXED)")
+st.title("🚀 EGX SMART SCANNER PRO MAX (BEST RESULT MODE)")
+
 
 # =========================
-# 📦 LOAD STOCKS (FIXED SAFE CSV)
+# 📦 LOAD STOCKS (SAFE)
 # =========================
 @st.cache_data(ttl=86400)
 def get_all_stocks():
     df = pd.read_csv("egx_symbols.csv")
 
-    # 🔥 تنظيف الأعمدة ضد أي مشاكل
     df.columns = df.columns.str.strip().str.lower()
 
-    # 🔥 ضمان وجود الأعمدة المطلوبة
-    required_cols = ["symbol", "name", "sector"]
-
-    for col in required_cols:
-        if col not in df.columns:
-            df[col] = "UNKNOWN"
+    if "symbol" not in df.columns:
+        df["symbol"] = "UNKNOWN"
+    if "name" not in df.columns:
+        df["name"] = "UNKNOWN"
+    if "sector" not in df.columns:
+        df["sector"] = "UNKNOWN"
 
     return df
 
@@ -31,7 +32,6 @@ def get_all_stocks():
 # 🧠 MARKET STATUS
 # =========================
 def is_market_open():
-    from datetime import datetime
 
     now = datetime.now()
 
@@ -45,7 +45,7 @@ def is_market_open():
 
 
 # =========================
-# 📊 DATA LOADER
+# 📊 DATA
 # =========================
 @st.cache_data(ttl=300)
 def get_data(symbol):
@@ -68,7 +68,7 @@ def get_data(symbol):
 
 
 # =========================
-# 📈 INDICATORS (UNCHANGED LOGIC)
+# 📈 INDICATORS
 # =========================
 def add_indicators(df):
 
@@ -115,7 +115,7 @@ def add_indicators(df):
 
 
 # =========================
-# 🧠 FILTER
+# 🧠 FILTER (NO HARD EXCLUSION)
 # =========================
 def smart_filter(df, market_open):
 
@@ -125,12 +125,7 @@ def smart_filter(df, market_open):
     if len(df) < 60:
         return False
 
-    liquidity = (df["close"] * df["volume"]).mean()
-
-    if market_open:
-        return liquidity > 1_000_000
-    else:
-        return liquidity > 200_000
+    return True
 
 
 # =========================
@@ -161,7 +156,7 @@ def calculate_adx(df):
 
 
 # =========================
-# 📈 ANALYZE
+# 📈 ANALYZE (BEST RESULT MODE)
 # =========================
 def analyze(df, market_open):
 
@@ -171,49 +166,69 @@ def analyze(df, market_open):
 
     adx = calculate_adx(df).iloc[-1]
 
-    if latest["rsi"] < 35:
+    # =========================
+    # 🧠 PRICE ACTION CORE
+    # =========================
+    price_trend = latest["close"] / df["close"].iloc[-5] - 1
+
+    if price_trend > 0:
+        score += 15
+        reasons.append("Short Uptrend")
+
+    if latest["close"] <= latest["support"] * 1.06:
+        score += 15
+        reasons.append("Near Support Zone")
+
+    # =========================
+    # 📊 INDICATORS (SOFT)
+    # =========================
+    if latest["rsi"] < 50:
         score += 10
-        reasons.append("RSI Oversold")
+        reasons.append("RSI Acceptable")
 
     if latest["macd"] > latest["signal"]:
         score += 10
-        reasons.append("MACD Bullish")
-
-    if latest["ema50"] > latest["ema200"]:
-        score += 10
-        reasons.append("Uptrend EMA")
-
-    if latest["volume"] > latest["vol_ma"] * 0.8:
-        score += 10
-        reasons.append("Volume Activity")
-
-    if adx > 20:
-        score += 10
-        reasons.append("ADX Trend")
-
-    if df["obv"].iloc[-1] > df["obv"].mean():
-        score += 10
-        reasons.append("OBV Strength")
+        reasons.append("MACD Positive")
 
     if latest["close"] > latest["vwap"]:
         score += 10
         reasons.append("Above VWAP")
 
-    if latest["close"] <= latest["support"] * 1.05:
+    # =========================
+    # 📈 VOLUME
+    # =========================
+    if latest["volume"] > df["volume"].mean() * 0.7:
         score += 10
-        reasons.append("Near Support")
+        reasons.append("Volume Active")
 
+    # =========================
+    # 🧠 TREND STRENGTH
+    # =========================
+    if adx > 15:
+        score += 10
+        reasons.append("Trend Exists")
+
+    if df["obv"].iloc[-1] > df["obv"].mean():
+        score += 10
+        reasons.append("OBV Strength")
+
+    # =========================
+    # 🔥 MARKET BOOST
+    # =========================
     if market_open:
         score += 5
     else:
-        score += 3
+        score += 8
 
-    if score >= 75:
-        signal = "🔥 قوي جدًا"
-    elif score >= 60:
+    # =========================
+    # 📊 SIGNAL (SOFT)
+    # =========================
+    if score >= 70:
+        signal = "🔥 فرصة قوية"
+    elif score >= 55:
         signal = "🟢 فرصة"
-    elif score >= 45:
-        signal = "⚠️ مراقبة"
+    elif score >= 40:
+        signal = "⚠️ متابعة"
     else:
         signal = "🟡 ضعيف"
 
@@ -221,7 +236,7 @@ def analyze(df, market_open):
 
 
 # =========================
-# 🎯 RISK
+# 🎯 RISK MANAGEMENT
 # =========================
 def risk_management(df):
 
@@ -247,7 +262,7 @@ def risk_management(df):
 
 
 # =========================
-# ⚙️ PROCESS STOCK (FIXED SAFE ACCESS)
+# ⚙️ PROCESS STOCK
 # =========================
 def process_stock(row, market_open):
 
@@ -268,11 +283,10 @@ def process_stock(row, market_open):
 
         signal, score, reasons = analyze(df, market_open)
 
-        if score < 40:
+        if score < 35:
             return None
 
         risk = risk_management(df)
-
         if risk is None:
             return None
 
@@ -301,7 +315,7 @@ def process_stock(row, market_open):
 # =========================
 results = []
 
-if st.button("🚀 SCAN EGX SMART FIXED"):
+if st.button("🚀 SCAN EGX BEST RESULT MODE"):
 
     stocks = get_all_stocks()
 
@@ -336,7 +350,7 @@ if st.button("🚀 SCAN EGX SMART FIXED"):
         top20 = df_res.sort_values("Score", ascending=False).head(20)
         best_sector = df_res.groupby("Sector").head(1)
 
-        st.success("🔥 SIGNALS GENERATED")
+        st.success("🔥 BEST OPPORTUNITIES GENERATED")
 
         st.subheader("🏆 Top 20 Stocks")
         st.dataframe(top20, use_container_width=True)
@@ -345,7 +359,28 @@ if st.button("🚀 SCAN EGX SMART FIXED"):
         st.dataframe(best_sector, use_container_width=True)
 
         csv = df_res.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download CSV", csv, "egx_signals.csv", "text/csv")
+        st.download_button("⬇️ Download CSV", csv, "egx_best_results.csv", "text/csv")
 
     else:
-        st.warning("⚠️ No signals found")
+
+        st.warning("⚠️ No strong signals → showing weakest opportunities")
+
+        fallback = []
+
+        for row in stocks.to_dict("records")[:30]:
+
+            df = get_data(row["symbol"])
+            if df is None:
+                continue
+
+            df = add_indicators(df)
+
+            signal, score, reasons = analyze(df, False)
+
+            fallback.append({
+                "Symbol": row["symbol"],
+                "Score": score,
+                "Signal": signal
+            })
+
+        st.dataframe(pd.DataFrame(fallback).sort_values("Score", ascending=False))
