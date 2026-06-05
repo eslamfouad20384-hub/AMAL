@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX SMART SCANNER PRO MAX (STABLE MODE)")
+st.title("🚀 EGX SMART SCANNER PRO MAX (RANKING ALWAYS ON)")
 
 
 # =========================
@@ -45,11 +45,11 @@ def is_market_open():
 
 
 # =========================
-# 📊 MULTI DATA SOURCE ENGINE
+# 📊 DATA SOURCE (MULTI)
 # =========================
 def get_data(symbol):
 
-    # 🧠 PRIMARY SOURCE (LOCAL CSV)
+    # 🧠 PRIMARY (LOCAL CSV)
     try:
         df = pd.read_csv(f"data/{symbol}.csv")
 
@@ -78,7 +78,6 @@ def get_data(symbol):
     except:
         pass
 
-    # ⚡ SAFETY
     return None
 
 
@@ -126,7 +125,7 @@ def add_indicators(df):
     tp = (df["high"] + df["low"] + df["close"]) / 3
     df["vwap"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
-    # 🚀 FIX: CLEAN DATA (بديل dropna)
+    # CLEAN DATA (NO DROPNA CRASH)
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.ffill().bfill()
 
@@ -141,7 +140,6 @@ def smart_filter(df):
     if df is None or df.empty:
         return False
 
-    # 🚀 FIXED (خفيف عشان EGX)
     if len(df) < 30:
         return False
 
@@ -220,7 +218,7 @@ def analyze(df, market_open):
         score += 10
         reasons.append("OBV Strength")
 
-    score += 8 if not market_open else 5
+    score += 5 if market_open else 8
 
     if score >= 70:
         signal = "🔥 فرصة قوية"
@@ -235,7 +233,7 @@ def analyze(df, market_open):
 
 
 # =========================
-# 🎯 RISK
+# 🎯 RISK MANAGEMENT
 # =========================
 def risk_management(df):
 
@@ -282,7 +280,6 @@ def process_stock(row, market_open):
 
         signal, score, reasons = analyze(df, market_open)
 
-        # 🚀 FIX: تخفيف شرط السكور
         if score < 25:
             return None
 
@@ -315,10 +312,9 @@ def process_stock(row, market_open):
 # =========================
 results = []
 
-if st.button("🚀 SCAN EGX STABLE MODE"):
+if st.button("🚀 SCAN EGX RANKING ENGINE"):
 
     stocks = get_all_stocks()
-
     market_open = is_market_open()
 
     st.info("🟢 Market Open Mode" if market_open else "🔵 Market Closed Mode")
@@ -343,23 +339,62 @@ if st.button("🚀 SCAN EGX STABLE MODE"):
 
             progress.progress((i + 1) / len(futures))
 
-    if results:
 
-        df_res = pd.DataFrame(results)
+# =========================
+# 📊 RANKING ALWAYS ON (MAIN FIX)
+# =========================
 
-        top20 = df_res.sort_values("Score", ascending=False).head(20)
-        best_sector = df_res.groupby("Sector").head(1)
+if results:
+    df_res = pd.DataFrame(results)
+else:
+    st.warning("⚠️ No strong signals → switching to MARKET RANKING MODE")
 
-        st.success("🔥 RESULTS GENERATED")
+    fallback = []
 
-        st.subheader("🏆 Top 20 Stocks")
-        st.dataframe(top20, use_container_width=True)
+    for row in stocks.to_dict("records")[:80]:
 
-        st.subheader("📊 Best Per Sector")
-        st.dataframe(best_sector, use_container_width=True)
+        try:
+            df = get_data(row["symbol"])
+            if df is None:
+                continue
 
-        csv = df_res.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download CSV", csv, "egx_final.csv", "text/csv")
+            df = add_indicators(df)
 
-    else:
-        st.warning("⚠️ No signals → market weak or data limited")
+            signal, score, reasons = analyze(df, False)
+
+            fallback.append({
+                "Symbol": row["symbol"],
+                "Name": row["name"],
+                "Sector": row["sector"],
+                "Score": float(score),
+                "Signal": signal,
+                "Reasons": ", ".join(reasons) if isinstance(reasons, list) else ""
+            })
+
+        except:
+            continue
+
+    df_res = pd.DataFrame(fallback)
+
+# =========================
+# 🏆 OUTPUT ALWAYS
+# =========================
+
+if df_res is not None and not df_res.empty:
+
+    top20 = df_res.sort_values("Score", ascending=False).head(20)
+    best_sector = df_res.sort_values("Score", ascending=False).groupby("Sector").head(1)
+
+    st.success("🔥 MARKET RANKING READY")
+
+    st.subheader("🏆 Top 20 Stocks")
+    st.dataframe(top20, use_container_width=True)
+
+    st.subheader("📊 Best Per Sector")
+    st.dataframe(best_sector, use_container_width=True)
+
+    csv = df_res.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV", csv, "egx_ranking.csv", "text/csv")
+
+else:
+    st.error("❌ No data available")
