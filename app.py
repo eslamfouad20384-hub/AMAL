@@ -6,10 +6,10 @@ import ta
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v4 (INSTITUTIONAL TARGET SYSTEM)")
+st.title("🚀 نظام تحليل الأسهم المصرية الذكي (احترافي v4)")
 
 # =========================
-# 📌 EGX UNIVERSE
+# 📌 الأسهم
 # =========================
 EGX = [
     "COMI.CA","MFPC.CA","PHDC.CA","ACRI.CA","ORAS.CA","HRHO.CA",
@@ -17,7 +17,7 @@ EGX = [
 ]
 
 # =========================
-# 📊 DATA LOADER
+# 📊 تحميل البيانات
 # =========================
 @st.cache_data(ttl=3600)
 def load_data(symbols, period, interval):
@@ -31,7 +31,7 @@ def load_data(symbols, period, interval):
     )
 
 # =========================
-# 📈 INDICATORS
+# 📈 المؤشرات
 # =========================
 def add_indicators(df):
     df = df.copy()
@@ -102,7 +102,7 @@ def adx(df, period=14):
     return dx.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 🧠 REGIME
+# 🧠 الحالة العامة
 # =========================
 def market_regime(last):
     score = 0
@@ -116,15 +116,15 @@ def market_regime(last):
         score += 1
 
     if score >= 4:
-        return "🚀 Strong Bull"
+        return "🚀 صعود قوي جداً"
     elif score == 3:
-        return "🟢 Bullish"
+        return "🟢 صعود"
     elif score == 2:
-        return "⚠️ Neutral"
-    return "🔴 Bearish"
+        return "⚠️ محايد"
+    return "🔴 هبوط"
 
 # =========================
-# 🧠 PRO ANALYSIS ENGINE
+# 🧠 المحرك الرئيسي
 # =========================
 def analyze(df_d, df_w, df_m):
 
@@ -143,7 +143,7 @@ def analyze(df_d, df_w, df_m):
 
     score = 0
 
-    # ================= TREND
+    # ================= اتجاه
     if last_d["Close"] > last_d["ema200"]:
         score += 15
     if last_w["Close"] > last_w["ema200"]:
@@ -151,76 +151,71 @@ def analyze(df_d, df_w, df_m):
     if last_m["Close"] > last_m["ema200"]:
         score += 15
 
-    # ================= MOMENTUM
+    # ================= زخم
     if 45 < last_d["rsi"] < 65:
         score += 8
     if last_d["macd"] > 0:
         score += 6
 
-    # ================= VOLUME
+    # ================= حجم
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 8
 
-    # ================= ADX
+    # ================= قوة ترند
     if adx_val > 20:
         score += 10
 
     regime = market_regime(last_d)
-    if "Strong" in regime:
-        score += 6
 
-    # ================= RISK MODEL
+    if "قوي" in regime:
+        score += 6
+    elif "صعود" in regime:
+        score += 3
+
+    # ================= إدارة مخاطر
     risk = atr_val / entry
     if risk < 0.05:
         score += 5
     else:
         score -= 5
 
-    # ================= TARGETS (PRO LEVEL)
+    # ================= أهداف
     support = last_d["support"]
     resistance = last_d["resistance"]
 
     sl = entry - atr_val * 1.5
 
-    # SHORT TARGET
     tp1 = entry + atr_val * 2
-
-    # MID TARGET
     tp2 = entry + atr_val * 4
+    tp3 = max(resistance, entry + atr_val * 6, entry * 1.20)
 
-    # LONG TARGET (INSTITUTIONAL)
-    tp3 = max(
-        resistance,
-        entry + atr_val * 6,
-        entry * 1.20
-    )
-
-    # ================= PROBABILITY MODEL (simple)
-    def prob(x):
+    # ================= احتمالات
+    def prob(target):
         base = score / 100
-        dist_factor = max(0.3, 1 - abs(x - entry) / entry)
-        return round(min(0.95, base * dist_factor), 2)
+        return round(min(0.95, base), 2)
 
     return {
-        "Score": round(score,2),
-        "Signal": "🔥 قوي جداً" if score > 85 else "🟢 فرصة قوية" if score > 70 else "⚠️ متابعة",
-        "Regime": regime,
-        "Entry": round(entry,2),
-        "SL": round(sl,2),
+        "درجة القوة": round(score,2),
+        "الإشارة": "🔥 قوية جداً" if score > 85 else "🟢 قوية" if score > 70 else "⚠️ متابعة",
+        "الحالة": regime,
 
-        "TP1 (Short)": round(tp1,2),
-        "TP2 (Mid)": round(tp2,2),
-        "TP3 (Long)": round(tp3,2),
+        "سعر الدخول": round(entry,2),
+        "وقف الخسارة": round(sl,2),
 
-        "Prob_TP1": prob(tp1),
-        "Prob_TP2": prob(tp2),
-        "Prob_TP3": prob(tp3),
+        "هدف 1 (قصير)": round(tp1,2),
+        "هدف 2 (متوسط)": round(tp2,2),
+        "هدف 3 (بعيد)": round(tp3,2),
+
+        "احتمال الهدف 1": prob(tp1),
+        "احتمال الهدف 2": prob(tp2),
+        "احتمال الهدف 3": prob(tp3),
     }
 
 # =========================
-# PROCESSOR
+# 🔧 المعالجة
 # =========================
 def process(symbol, daily, weekly, monthly):
+
     try:
         df_d = daily[symbol].dropna()
         df_w = weekly[symbol].dropna()
@@ -230,16 +225,17 @@ def process(symbol, daily, weekly, monthly):
             return None
 
         result = analyze(df_d, df_w, df_m)
-        result["Symbol"] = symbol.replace(".CA","")
+        result["السهم"] = symbol.replace(".CA","")
+
         return result
 
     except:
         return None
 
 # =========================
-# RUN
+# 🚀 التشغيل
 # =========================
-if st.button("🚀 RUN PRO MAX v4"):
+if st.button("🚀 تشغيل التحليل الذكي"):
 
     daily = load_data(EGX, "6mo", "1d")
     weekly = load_data(EGX, "2y", "1wk")
@@ -257,15 +253,22 @@ if st.button("🚀 RUN PRO MAX v4"):
 
     if results:
         df = pd.DataFrame(results)
-        df = df.sort_values("Score", ascending=False)
 
-        st.success("🔥 INSTITUTIONAL SYSTEM READY")
+        # ترتيب الأقوى أولاً
+        df = df.sort_values("درجة القوة", ascending=False)
+
+        # السهم أول عمود (شمال الجدول)
+        cols = ["السهم"] + [c for c in df.columns if c != "السهم"]
+        df = df[cols]
+
+        st.success("🔥 تم التحليل بنجاح")
+
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
-            "⬇️ Download",
+            "⬇️ تحميل التقرير",
             df.to_csv(index=False),
-            "egx_pro_max_v4.csv"
+            "egx_ai_arabic_v4.csv"
         )
     else:
-        st.warning("No signals found")
+        st.warning("لا توجد إشارات حالياً")
