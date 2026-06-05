@@ -6,10 +6,10 @@ import ta
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(layout="wide")
-st.title("🚀 نظام تحليل الأسهم المصرية الذكي (احترافي v4)")
+st.title("🚀 EGX AI PRO MAX v4 (AI SMART ENGINE)")
 
 # =========================
-# 📌 الأسهم
+# 📌 EGX STOCKS
 # =========================
 EGX = [
     "COMI.CA","MFPC.CA","PHDC.CA","ACRI.CA","ORAS.CA","HRHO.CA",
@@ -17,7 +17,7 @@ EGX = [
 ]
 
 # =========================
-# 📊 تحميل البيانات
+# 📊 DATA
 # =========================
 @st.cache_data(ttl=3600)
 def load_data(symbols, period, interval):
@@ -31,7 +31,7 @@ def load_data(symbols, period, interval):
     )
 
 # =========================
-# 📈 المؤشرات
+# 📈 INDICATORS
 # =========================
 def add_indicators(df):
     df = df.copy()
@@ -102,7 +102,60 @@ def adx(df, period=14):
     return dx.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 🧠 الحالة العامة
+# 🧠 AI CONFIDENCE ENGINE
+# =========================
+def ai_confidence(last_d, last_w, last_m, adx_val, atr_val):
+
+    score = 0
+    total = 0
+
+    # TREND
+    total += 3
+    if last_d["Close"] > last_d["ema200"]:
+        score += 1
+    if last_w["Close"] > last_w["ema200"]:
+        score += 1
+    if last_m["Close"] > last_m["ema200"]:
+        score += 1
+
+    # MOMENTUM
+    total += 2
+    if last_d["macd"] > 0:
+        score += 1
+    if 45 < last_d["rsi"] < 65:
+        score += 1
+
+    # VOLUME
+    total += 1
+    if last_d["Volume"] > last_d["vol_ma"]:
+        score += 1
+
+    # TREND STRENGTH
+    total += 1
+    if adx_val > 20:
+        score += 1
+
+    # RISK QUALITY
+    total += 1
+    if atr_val / last_d["Close"] < 0.05:
+        score += 1
+
+    return score / total
+
+# =========================
+# 🎯 SMART PROBABILITY
+# =========================
+def smart_probability(conf, target, entry):
+
+    distance = abs(target - entry) / entry
+    distance_factor = max(0.3, 1 - distance)
+
+    prob = conf * distance_factor
+
+    return round(min(0.95, prob), 2)
+
+# =========================
+# 🧠 REGIME
 # =========================
 def market_regime(last):
     score = 0
@@ -116,7 +169,7 @@ def market_regime(last):
         score += 1
 
     if score >= 4:
-        return "🚀 صعود قوي جداً"
+        return "🚀 قوي جداً"
     elif score == 3:
         return "🟢 صعود"
     elif score == 2:
@@ -124,7 +177,7 @@ def market_regime(last):
     return "🔴 هبوط"
 
 # =========================
-# 🧠 المحرك الرئيسي
+# 🧠 ENGINE
 # =========================
 def analyze(df_d, df_w, df_m):
 
@@ -143,7 +196,7 @@ def analyze(df_d, df_w, df_m):
 
     score = 0
 
-    # ================= اتجاه
+    # TREND
     if last_d["Close"] > last_d["ema200"]:
         score += 15
     if last_w["Close"] > last_w["ema200"]:
@@ -151,17 +204,16 @@ def analyze(df_d, df_w, df_m):
     if last_m["Close"] > last_m["ema200"]:
         score += 15
 
-    # ================= زخم
+    # MOMENTUM
     if 45 < last_d["rsi"] < 65:
         score += 8
     if last_d["macd"] > 0:
         score += 6
 
-    # ================= حجم
+    # VOLUME
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 8
 
-    # ================= قوة ترند
     if adx_val > 20:
         score += 10
 
@@ -169,17 +221,15 @@ def analyze(df_d, df_w, df_m):
 
     if "قوي" in regime:
         score += 6
-    elif "صعود" in regime:
-        score += 3
 
-    # ================= إدارة مخاطر
+    # RISK
     risk = atr_val / entry
     if risk < 0.05:
         score += 5
     else:
         score -= 5
 
-    # ================= أهداف
+    # TARGETS
     support = last_d["support"]
     resistance = last_d["resistance"]
 
@@ -189,33 +239,30 @@ def analyze(df_d, df_w, df_m):
     tp2 = entry + atr_val * 4
     tp3 = max(resistance, entry + atr_val * 6, entry * 1.20)
 
-    # ================= احتمالات
-    def prob(target):
-        base = score / 100
-        return round(min(0.95, base), 2)
+    # AI CONFIDENCE
+    conf = ai_confidence(last_d, last_w, last_m, adx_val, atr_val)
 
     return {
-        "درجة القوة": round(score,2),
-        "الإشارة": "🔥 قوية جداً" if score > 85 else "🟢 قوية" if score > 70 else "⚠️ متابعة",
-        "الحالة": regime,
+        "Score": round(score,2),
+        "Signal": "🔥 قوي جداً" if score > 85 else "🟢 قوي" if score > 70 else "⚠️ متابعة",
+        "Regime": regime,
 
-        "سعر الدخول": round(entry,2),
-        "وقف الخسارة": round(sl,2),
+        "Entry": round(entry,2),
+        "SL": round(sl,2),
 
-        "هدف 1 (قصير)": round(tp1,2),
-        "هدف 2 (متوسط)": round(tp2,2),
-        "هدف 3 (بعيد)": round(tp3,2),
+        "TP1": round(tp1,2),
+        "TP2": round(tp2,2),
+        "TP3": round(tp3,2),
 
-        "احتمال الهدف 1": prob(tp1),
-        "احتمال الهدف 2": prob(tp2),
-        "احتمال الهدف 3": prob(tp3),
+        "Prob_TP1": smart_probability(conf, tp1, entry),
+        "Prob_TP2": smart_probability(conf, tp2, entry),
+        "Prob_TP3": smart_probability(conf, tp3, entry),
     }
 
 # =========================
-# 🔧 المعالجة
+# PROCESSOR
 # =========================
 def process(symbol, daily, weekly, monthly):
-
     try:
         df_d = daily[symbol].dropna()
         df_w = weekly[symbol].dropna()
@@ -225,17 +272,16 @@ def process(symbol, daily, weekly, monthly):
             return None
 
         result = analyze(df_d, df_w, df_m)
-        result["السهم"] = symbol.replace(".CA","")
-
+        result["Symbol"] = symbol.replace(".CA","")
         return result
 
     except:
         return None
 
 # =========================
-# 🚀 التشغيل
+# RUN
 # =========================
-if st.button("🚀 تشغيل التحليل الذكي"):
+if st.button("🚀 RUN AI PRO MAX v4"):
 
     daily = load_data(EGX, "6mo", "1d")
     weekly = load_data(EGX, "2y", "1wk")
@@ -254,21 +300,19 @@ if st.button("🚀 تشغيل التحليل الذكي"):
     if results:
         df = pd.DataFrame(results)
 
-        # ترتيب الأقوى أولاً
-        df = df.sort_values("درجة القوة", ascending=False)
+        df = df.sort_values("Score", ascending=False)
 
-        # السهم أول عمود (شمال الجدول)
-        cols = ["السهم"] + [c for c in df.columns if c != "السهم"]
+        cols = ["Symbol"] + [c for c in df.columns if c != "Symbol"]
         df = df[cols]
 
-        st.success("🔥 تم التحليل بنجاح")
+        st.success("🔥 AI SYSTEM READY")
 
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
-            "⬇️ تحميل التقرير",
+            "⬇️ Download",
             df.to_csv(index=False),
-            "egx_ai_arabic_v4.csv"
+            "egx_ai_pro_max_v4.csv"
         )
     else:
-        st.warning("لا توجد إشارات حالياً")
+        st.warning("No signals found")
