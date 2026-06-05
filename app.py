@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX SMART SCANNER PRO MAX (MULTI DATA ENGINE)")
+st.title("🚀 EGX SMART SCANNER PRO MAX (STABLE MODE)")
 
 
 # =========================
@@ -45,60 +45,40 @@ def is_market_open():
 
 
 # =========================
-# 📊 MULTI DATA SOURCE ENGINE (FIXED)
+# 📊 MULTI DATA SOURCE ENGINE
 # =========================
 def get_data(symbol):
 
-    # =========================
-    # 🧠 1) PRIMARY SOURCE (LOCAL CSV / API)
-    # =========================
+    # 🧠 PRIMARY SOURCE (LOCAL CSV)
     try:
-        local_path = f"data/{symbol}.csv"
-        df = pd.read_csv(local_path)
+        df = pd.read_csv(f"data/{symbol}.csv")
 
-        if df is not None and len(df) > 50:
+        if df is not None and len(df) > 20:
             df.columns = [c.lower() for c in df.columns]
 
-            rename_map = {
+            df = df.rename(columns={
+                "adj close": "close",
                 "date": "datetime",
-                "time": "datetime",
-                "adj close": "close"
-            }
-
-            df = df.rename(columns=rename_map)
+                "time": "datetime"
+            })
 
             return df
-
     except:
         pass
 
-
-    # =========================
-    # 🔁 2) FALLBACK SOURCE (YFINANCE)
-    # =========================
+    # 🔁 FALLBACK (YFINANCE)
     try:
-        symbol_yf = f"{symbol}.CA"
-
-        df = yf.download(
-            symbol_yf,
-            period="1y",
-            interval="1d",
-            progress=False
-        )
+        df = yf.download(f"{symbol}.CA", period="1y", interval="1d", progress=False)
 
         if df is not None and not df.empty:
             df = df.reset_index()
             df.columns = [c.lower() for c in df.columns]
 
             return df
-
     except:
         pass
 
-
-    # =========================
-    # ⚡ 3) SAFETY LAYER
-    # =========================
+    # ⚡ SAFETY
     return None
 
 
@@ -146,18 +126,23 @@ def add_indicators(df):
     tp = (df["high"] + df["low"] + df["close"]) / 3
     df["vwap"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
-    return df.dropna()
+    # 🚀 FIX: CLEAN DATA (بديل dropna)
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.ffill().bfill()
+
+    return df
 
 
 # =========================
 # 🧠 FILTER
 # =========================
-def smart_filter(df, market_open):
+def smart_filter(df):
 
     if df is None or df.empty:
         return False
 
-    if len(df) < 60:
+    # 🚀 FIXED (خفيف عشان EGX)
+    if len(df) < 30:
         return False
 
     return True
@@ -235,10 +220,7 @@ def analyze(df, market_open):
         score += 10
         reasons.append("OBV Strength")
 
-    if market_open:
-        score += 5
-    else:
-        score += 8
+    score += 8 if not market_open else 5
 
     if score >= 70:
         signal = "🔥 فرصة قوية"
@@ -253,7 +235,7 @@ def analyze(df, market_open):
 
 
 # =========================
-# 🎯 RISK MANAGEMENT
+# 🎯 RISK
 # =========================
 def risk_management(df):
 
@@ -295,12 +277,13 @@ def process_stock(row, market_open):
 
         df = add_indicators(df)
 
-        if not smart_filter(df, market_open):
+        if not smart_filter(df):
             return None
 
         signal, score, reasons = analyze(df, market_open)
 
-        if score < 35:
+        # 🚀 FIX: تخفيف شرط السكور
+        if score < 25:
             return None
 
         risk = risk_management(df)
@@ -332,7 +315,7 @@ def process_stock(row, market_open):
 # =========================
 results = []
 
-if st.button("🚀 SCAN EGX MULTI SOURCE"):
+if st.button("🚀 SCAN EGX STABLE MODE"):
 
     stocks = get_all_stocks()
 
@@ -367,7 +350,7 @@ if st.button("🚀 SCAN EGX MULTI SOURCE"):
         top20 = df_res.sort_values("Score", ascending=False).head(20)
         best_sector = df_res.groupby("Sector").head(1)
 
-        st.success("🔥 BEST OPPORTUNITIES GENERATED")
+        st.success("🔥 RESULTS GENERATED")
 
         st.subheader("🏆 Top 20 Stocks")
         st.dataframe(top20, use_container_width=True)
@@ -376,7 +359,7 @@ if st.button("🚀 SCAN EGX MULTI SOURCE"):
         st.dataframe(best_sector, use_container_width=True)
 
         csv = df_res.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download CSV", csv, "egx_multi_source.csv", "text/csv")
+        st.download_button("⬇️ Download CSV", csv, "egx_final.csv", "text/csv")
 
     else:
-        st.warning("⚠️ No results found even in multi-source mode")
+        st.warning("⚠️ No signals → market weak or data limited")
