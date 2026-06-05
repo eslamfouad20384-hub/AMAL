@@ -49,7 +49,6 @@ def is_market_open():
 # =========================
 def get_data(symbol):
 
-    # 🧠 PRIMARY (LOCAL CSV)
     try:
         df = pd.read_csv(f"data/{symbol}.csv")
 
@@ -66,7 +65,6 @@ def get_data(symbol):
     except:
         pass
 
-    # 🔁 FALLBACK (YFINANCE)
     try:
         df = yf.download(f"{symbol}.CA", period="1y", interval="1d", progress=False)
 
@@ -125,7 +123,6 @@ def add_indicators(df):
     tp = (df["high"] + df["low"] + df["close"]) / 3
     df["vwap"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
-    # CLEAN DATA (NO DROPNA CRASH)
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.ffill().bfill()
 
@@ -312,10 +309,10 @@ def process_stock(row, market_open):
 # =========================
 results = []
 
-if st.button("🚀 SCAN EGX RANKING ENGINE"):
+stocks = get_all_stocks()   # ✅ FIX: تعريف ثابت خارج الزر
+market_open = is_market_open()
 
-    stocks = get_all_stocks()
-    market_open = is_market_open()
+if st.button("🚀 SCAN EGX RANKING ENGINE"):
 
     st.info("🟢 Market Open Mode" if market_open else "🔵 Market Closed Mode")
 
@@ -341,7 +338,7 @@ if st.button("🚀 SCAN EGX RANKING ENGINE"):
 
 
 # =========================
-# 📊 RANKING ALWAYS ON (MAIN FIX)
+# 📊 RANKING ALWAYS ON
 # =========================
 
 if results:
@@ -375,6 +372,7 @@ else:
             continue
 
     df_res = pd.DataFrame(fallback)
+
 
 # =========================
 # 🏆 OUTPUT ALWAYS
