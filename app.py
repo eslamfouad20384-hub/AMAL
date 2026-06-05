@@ -4,10 +4,9 @@ import numpy as np
 import yfinance as yf
 import ta
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v3 (INSTITUTIONAL SCANNER)")
+st.title("🚀 EGX AI PRO MAX v3.1 (DAILY + WEEKLY + MONTHLY)")
 
 # =========================
 # 📌 EGX UNIVERSE
@@ -18,7 +17,7 @@ EGX = [
 ]
 
 # =========================
-# 📊 DATA LOADER (FAST CACHE)
+# 📊 DATA LOADER
 # =========================
 @st.cache_data(ttl=3600)
 def load_data(symbols, period, interval):
@@ -32,7 +31,7 @@ def load_data(symbols, period, interval):
     )
 
 # =========================
-# 📈 INDICATORS (OPTIMIZED)
+# 📈 INDICATORS
 # =========================
 def add_indicators(df):
     df = df.copy()
@@ -54,13 +53,12 @@ def add_indicators(df):
     df["support"] = low.rolling(20).min()
     df["resistance"] = high.rolling(20).max()
 
-    obv = ta.volume.OnBalanceVolumeIndicator(close, vol)
-    df["obv"] = obv.on_balance_volume()
+    df["obv"] = ta.volume.OnBalanceVolumeIndicator(close, vol).on_balance_volume()
 
     return df
 
 # =========================
-# 📊 ATR (FAST)
+# 📊 ATR
 # =========================
 def atr(df, period=14):
     high = df["High"]
@@ -76,7 +74,7 @@ def atr(df, period=14):
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 📊 ADX (IMPROVED WILDER)
+# 📊 ADX (Wilder Improved)
 # =========================
 def adx(df, period=14):
     high = df["High"]
@@ -97,14 +95,14 @@ def adx(df, period=14):
 
     atr_val = tr.ewm(alpha=1/period, adjust=False).mean()
 
-    plus_di = 100 * (pd.Series(plus_dm, index=df.index).ewm(alpha=1/period).mean() / (atr_val + 1e-9))
-    minus_di = 100 * (pd.Series(minus_dm, index=df.index).ewm(alpha=1/period).mean() / (atr_val + 1e-9))
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/period).mean() / (atr_val + 1e-9)
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/period).mean() / (atr_val + 1e-9)
 
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
     return dx.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 🧠 MARKET REGIME v2
+# 🧠 MARKET REGIME
 # =========================
 def market_regime(last):
     score = 0
@@ -128,66 +126,70 @@ def market_regime(last):
         return "🔴 Bearish"
 
 # =========================
-# 🧠 SCORING ENGINE v3
+# 🧠 ANALYSIS ENGINE (MULTI TIMEFRAME)
 # =========================
-def analyze(df_d, df_w):
+def analyze(df_d, df_w, df_m):
 
     df_d = add_indicators(df_d)
     df_w = add_indicators(df_w)
+    df_m = add_indicators(df_m)
 
     last_d = df_d.iloc[-1]
     last_w = df_w.iloc[-1]
+    last_m = df_m.iloc[-1]
 
     atr_val = atr(df_d).iloc[-1]
     adx_val = adx(df_d).iloc[-1]
 
     score = 0
 
-    # ================= TREND (weighted smarter)
+    # ================= DAILY TREND
     if last_d["Close"] > last_d["ema200"]:
-        score += 18
+        score += 15
     if last_d["ema20"] > last_d["ema50"]:
         score += 10
 
+    # ================= WEEKLY CONFIRMATION
+    if last_w["Close"] > last_w["ema200"]:
+        score += 12
+
+    # ================= MONTHLY CONFIRMATION (IMPORTANT)
+    if last_m["Close"] > last_m["ema200"]:
+        score += 15
+
     # ================= MOMENTUM
     if 45 < last_d["rsi"] < 65:
-        score += 10
+        score += 8
     if last_d["macd"] > 0:
+        score += 6
+
+    # ================= VOLUME
+    if last_d["Volume"] > last_d["vol_ma"]:
         score += 8
 
-    # ================= VOLUME CONFIRMATION
-    if last_d["Volume"] > last_d["vol_ma"]:
-        score += 10
-
+    # ================= OBV
     if last_d["obv"] > df_d["obv"].rolling(10).mean().iloc[-1]:
-        score += 7
-
-    # ================= VWAP proxy (trend strength)
-    if last_d["Close"] > last_d["ema20"]:
-        score += 5
+        score += 6
 
     # ================= VOLATILITY FILTER
-    if atr_val > df_d["Close"].mean() * 0.01:
-        score += 7
+    if atr_val > last_d["Close"] * 0.01:
+        score += 6
 
-    # ================= TREND STRENGTH
+    # ================= ADX TREND STRENGTH
     if adx_val > 20:
-        score += 12
+        score += 10
 
     # ================= SUPPORT ZONE
     if last_d["Close"] <= last_d["support"] * 1.02:
         score += 5
 
-    # ================= WEEKLY CONFIRMATION
-    if last_w["Close"] > last_w["ema200"]:
-        score += 10
-
     # ================= REGIME BONUS
     regime = market_regime(last_d)
+
     if "Strong" in regime:
-        score += 8
+        score += 6
     elif "Bullish" in regime:
-        score += 4
+        score += 3
 
     # ================= FINAL SIGNAL
     if score >= 85:
@@ -204,13 +206,17 @@ def analyze(df_d, df_w):
 # =========================
 # ⚙️ PROCESSOR
 # =========================
-def process(symbol, daily, weekly):
+def process(symbol, daily, weekly, monthly):
 
     try:
         df_d = daily[symbol].dropna()
         df_w = weekly[symbol].dropna()
+        df_m = monthly[symbol].dropna()
 
-        score, signal, regime, atr_val = analyze(df_d, df_w)
+        if df_d.empty or df_w.empty or df_m.empty:
+            return None
+
+        score, signal, regime, atr_val = analyze(df_d, df_w, df_m)
 
         last = df_d.iloc[-1]
         entry = last["Close"]
@@ -234,15 +240,16 @@ def process(symbol, daily, weekly):
 # =========================
 # 🚀 RUN ENGINE
 # =========================
-if st.button("🚀 RUN PRO MAX v3"):
+if st.button("🚀 RUN PRO MAX v3.1"):
 
     daily = load_data(EGX, "6mo", "1d")
     weekly = load_data(EGX, "2y", "1wk")
+    monthly = load_data(EGX, "5y", "1mo")
 
     results = []
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = [ex.submit(process, s, daily, weekly) for s in EGX]
+        futures = [ex.submit(process, s, daily, weekly, monthly) for s in EGX]
 
         for f in futures:
             r = f.result()
@@ -253,13 +260,13 @@ if st.button("🚀 RUN PRO MAX v3"):
         df = pd.DataFrame(results)
         df = df.sort_values("Score", ascending=False)
 
-        st.success("🔥 PRO MAX v3 READY")
+        st.success("🔥 PRO MAX v3.1 READY")
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_pro_max_v3.csv"
+            "egx_pro_max_v3_1.csv"
         )
     else:
         st.warning("No signals found")
