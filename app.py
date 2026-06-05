@@ -16,14 +16,19 @@ def get_all_stocks():
 
 
 # =========================
-# 📊 DATA LOADER
+# 📊 DATA LOADER (FIXED STABILITY)
 # =========================
 @st.cache_data(ttl=300)
 def get_data(symbol, interval="1d", period="1y"):
     try:
         symbol = f"{symbol}.CA"
 
-        df = yf.download(symbol, interval=interval, period=period, progress=False)
+        df = yf.download(
+            symbol,
+            interval=interval,
+            period=period,
+            progress=False
+        )
 
         if df is None or df.empty:
             return None
@@ -38,14 +43,13 @@ def get_data(symbol, interval="1d", period="1y"):
 
 
 # =========================
-# 📈 INDICATORS
+# 📈 INDICATORS (UNCHANGED LOGIC)
 # =========================
 def add_indicators(df):
 
     df["ema50"] = df["close"].ewm(span=50).mean()
     df["ema200"] = df["close"].ewm(span=200).mean()
 
-    # RSI
     delta = df["close"].diff()
     gain = np.where(delta > 0, delta, 0)
     loss = np.where(delta < 0, -delta, 0)
@@ -56,43 +60,35 @@ def add_indicators(df):
     rs = avg_gain / (avg_loss + 1e-9)
     df["rsi"] = 100 - (100 / (1 + rs))
 
-    # MACD
     ema12 = df["close"].ewm(span=12).mean()
     ema26 = df["close"].ewm(span=26).mean()
+
     df["macd"] = ema12 - ema26
     df["signal"] = df["macd"].ewm(span=9).mean()
 
-    # ATR
-    tr = pd.concat([
-        df["high"] - df["low"],
-        abs(df["high"] - df["close"].shift()),
-        abs(df["low"] - df["close"].shift())
-    ], axis=1).max(axis=1)
+    high_low = df["high"] - df["low"]
+    high_close = abs(df["high"] - df["close"].shift())
+    low_close = abs(df["low"] - df["close"].shift())
 
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df["atr"] = tr.rolling(14).mean()
 
-    # Volume
     df["vol_ma"] = df["volume"].rolling(20).mean()
 
-    # Support / Resistance
     df["support"] = df["low"].rolling(20).min()
     df["resistance"] = df["high"].rolling(20).max()
 
-    # OBV
     df["obv"] = (np.where(
         df["close"] > df["close"].shift(1), df["volume"],
         np.where(df["close"] < df["close"].shift(1), -df["volume"], 0)
     )).cumsum()
 
-    # VWAP
     tp = (df["high"] + df["low"] + df["close"]) / 3
     df["vwap"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
-    # MFI (simple stable)
     mf = tp * df["volume"]
     df["mfi"] = 100 - (100 / (1 + mf.rolling(14).mean() / (mf.rolling(14).mean() + 1e-9)))
 
-    # Stoch RSI
     rsi_min = df["rsi"].rolling(14).min()
     rsi_max = df["rsi"].rolling(14).max()
     df["stoch_rsi"] = (df["rsi"] - rsi_min) / (rsi_max - rsi_min + 1e-9)
@@ -101,7 +97,7 @@ def add_indicators(df):
 
 
 # =========================
-# 🧠 FILTER
+# 🧠 FILTER (UNCHANGED)
 # =========================
 def smart_filter(df):
 
@@ -119,7 +115,7 @@ def smart_filter(df):
 
 
 # =========================
-# 📊 ADX
+# 📊 ADX (UNCHANGED)
 # =========================
 def calculate_adx(df, period=14):
 
@@ -145,7 +141,7 @@ def calculate_adx(df, period=14):
 
 
 # =========================
-# 📈 ANALYZE
+# 📈 ANALYZE (UNCHANGED LOGIC)
 # =========================
 def analyze(df):
 
@@ -199,7 +195,7 @@ def analyze(df):
         score += 5
         reasons.append("Near Support")
 
-    # ✅ FIXED SIGNAL LOGIC
+    # FIXED SAFE SIGNAL
     if score >= 80:
         signal = "🔥 قوي جدًا"
     elif score >= 65:
@@ -213,7 +209,7 @@ def analyze(df):
 
 
 # =========================
-# 🎯 RISK
+# 🎯 RISK (UNCHANGED)
 # =========================
 def risk_management(df):
 
@@ -239,7 +235,7 @@ def risk_management(df):
 
 
 # =========================
-# ⚙️ PROCESS STOCK
+# ⚙️ PROCESS STOCK (FIXED STABILITY)
 # =========================
 def process_stock(row):
 
@@ -250,10 +246,13 @@ def process_stock(row):
 
         df = get_data(symbol)
 
-        if df is None:
+        if df is None or df.empty:
             return None
 
         df = add_indicators(df)
+
+        if df is None or df.empty:
+            return None
 
         if not smart_filter(df):
             return None
@@ -288,7 +287,7 @@ def process_stock(row):
 
 
 # =========================
-# 🚀 MAIN
+# 🚀 MAIN ENGINE (FIXED THREADING)
 # =========================
 results = []
 
@@ -298,14 +297,23 @@ if st.button("🚀 SCAN EGX FULL MARKET"):
 
     progress = st.progress(0)
 
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
 
-        for i, res in enumerate(executor.map(process_stock, stocks.to_dict("records"))):
+        futures = [
+            executor.submit(process_stock, row)
+            for row in stocks.to_dict("records")
+        ]
 
-            if res:
-                results.append(res)
+        for i, f in enumerate(futures):
 
-            progress.progress((i + 1) / len(stocks))
+            try:
+                res = f.result(timeout=10)
+                if res:
+                    results.append(res)
+            except:
+                pass
+
+            progress.progress((i + 1) / len(futures))
 
     if results:
 
