@@ -2,302 +2,188 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import ta
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import os
+import joblib
+from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX SMART SCANNER PRO MAX (RANKING ALWAYS ON)")
+st.title("🚀 HYBRID EGX SMART ENGINE (AI + SPEED + MULTI TF)")
 
 
 # =========================
-# 📦 LOAD STOCKS
+# 📌 STOCK LIST
+# =========================
+EGX = [
+    "COMI.CA","MFPC.CA","PHDC.CA","ACRI.CA","ORAS.CA","HRHO.CA",
+    "TMGH.CA","FWRY.CA","SWDY.CA","ETEL.CA","AMOC.CA","HELI.CA"
+]
+
+
+MODEL_FILE = "ai_model.pkl"
+
+
+# =========================
+# 📊 LOAD DATA
 # =========================
 @st.cache_data(ttl=86400)
-def get_all_stocks():
-    df = pd.read_csv("egx_symbols.csv")
-
-    df.columns = df.columns.str.strip().str.lower()
-
-    if "symbol" not in df.columns:
-        df["symbol"] = "UNKNOWN"
-    if "name" not in df.columns:
-        df["name"] = "UNKNOWN"
-    if "sector" not in df.columns:
-        df["sector"] = "UNKNOWN"
-
-    return df
+def load_data(symbols, period, interval):
+    return yf.download(symbols, period=period, interval=interval, group_by="ticker", threads=True)
 
 
 # =========================
-# 🧠 MARKET STATUS
+# 🤖 AI MODEL
 # =========================
-def is_market_open():
-
-    now = datetime.now()
-
-    if now.weekday() >= 5:
-        return False
-
-    if 10 <= now.hour < 14:
-        return True
-
-    return False
-
-
-# =========================
-# 📊 DATA SOURCE (MULTI)
-# =========================
-def get_data(symbol):
-
-    try:
-        df = pd.read_csv(f"data/{symbol}.csv")
-
-        if df is not None and len(df) > 20:
-            df.columns = [c.lower() for c in df.columns]
-
-            df = df.rename(columns={
-                "adj close": "close",
-                "date": "datetime",
-                "time": "datetime"
-            })
-
-            return df
-    except:
-        pass
-
-    try:
-        df = yf.download(f"{symbol}.CA", period="1y", interval="1d", progress=False)
-
-        if df is not None and not df.empty:
-            df = df.reset_index()
-            df.columns = [c.lower() for c in df.columns]
-
-            return df
-    except:
-        pass
-
+def load_ai():
+    if os.path.exists(MODEL_FILE):
+        return joblib.load(MODEL_FILE)
     return None
 
 
 # =========================
-# 📈 INDICATORS
+# 📈 INDICATORS (FAST + POWERFUL)
 # =========================
 def add_indicators(df):
 
-    df["ema50"] = df["close"].ewm(span=50).mean()
-    df["ema200"] = df["close"].ewm(span=200).mean()
+    df = df.copy()
 
-    delta = df["close"].diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
+    df["rsi"] = ta.momentum.RSIIndicator(df["Close"]).rsi()
+    df["macd"] = ta.trend.MACD(df["Close"]).macd()
 
-    avg_gain = pd.Series(gain).ewm(alpha=1/14).mean()
-    avg_loss = pd.Series(loss).ewm(alpha=1/14).mean()
+    df["ema20"] = df["Close"].ewm(span=20).mean()
+    df["ema50"] = df["Close"].ewm(span=50).mean()
 
-    rs = avg_gain / (avg_loss + 1e-9)
-    df["rsi"] = 100 - (100 / (1 + rs))
+    df["vol_ma"] = df["Volume"].rolling(20).mean()
 
-    ema12 = df["close"].ewm(span=12).mean()
-    ema26 = df["close"].ewm(span=26).mean()
-
-    df["macd"] = ema12 - ema26
-    df["signal"] = df["macd"].ewm(span=9).mean()
-
-    high_low = df["high"] - df["low"]
-    high_close = abs(df["high"] - df["close"].shift())
-    low_close = abs(df["low"] - df["close"].shift())
-
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(14).mean()
-
-    df["vol_ma"] = df["volume"].rolling(20).mean()
-
-    df["support"] = df["low"].rolling(20).min()
-    df["resistance"] = df["high"].rolling(20).max()
+    df["support"] = df["Low"].rolling(20).min()
+    df["resistance"] = df["High"].rolling(20).max()
 
     df["obv"] = (np.where(
-        df["close"] > df["close"].shift(1), df["volume"],
-        np.where(df["close"] < df["close"].shift(1), -df["volume"], 0)
+        df["Close"] > df["Close"].shift(1),
+        df["Volume"],
+        -df["Volume"]
     )).cumsum()
 
-    tp = (df["high"] + df["low"] + df["close"]) / 3
-    df["vwap"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
+    df["vwap"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
 
-    df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.ffill().bfill()
-
-    return df
-
-
-# =========================
-# 🧠 FILTER
-# =========================
-def smart_filter(df):
-
-    if df is None or df.empty:
-        return False
-
-    if len(df) < 30:
-        return False
-
-    return True
+    return df.dropna()
 
 
 # =========================
 # 📊 ADX
 # =========================
-def calculate_adx(df):
+def adx(df):
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
 
-    plus_dm = df["high"].diff()
-    minus_dm = df["low"].diff()
-
-    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0)
-    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0)
+    plus_dm = high.diff()
+    minus_dm = low.diff()
 
     tr = pd.concat([
-        df["high"] - df["low"],
-        abs(df["high"] - df["close"].shift()),
-        abs(df["low"] - df["close"].shift())
+        high - low,
+        abs(high - close.shift()),
+        abs(low - close.shift())
     ], axis=1).max(axis=1)
 
     atr = tr.rolling(14).mean()
 
-    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr)
-    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr)
-
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
-
-    return dx.rolling(14).mean()
+    return (atr / (atr.mean() + 1e-9)) * 50
 
 
 # =========================
-# 📈 ANALYZE
+# 🧠 ANALYZE (HYBRID CORE)
 # =========================
-def analyze(df, market_open):
+def analyze(df_daily, df_weekly, df_monthly, model=None):
 
-    latest = df.iloc[-1]
-    score = 0
-    reasons = []
+    last = df_daily.iloc[-1]
+    score_fast = 0
+    score_slow = 0
 
-    adx = calculate_adx(df).iloc[-1]
+    # ================= FAST SCORE =================
+    if last["rsi"] < 55:
+        score_fast += 10
+    if last["macd"] > 0:
+        score_fast += 10
+    if last["Close"] > last["vwap"]:
+        score_fast += 10
+    if last["Volume"] > last["vol_ma"]:
+        score_fast += 10
+    if last["Close"] <= last["support"] * 1.05:
+        score_fast += 10
 
-    price_trend = latest["close"] / df["close"].iloc[-5] - 1
+    # ================= SLOW SCORE =================
+    if df_weekly["ema20"].iloc[-1] > df_weekly["ema50"].iloc[-1]:
+        score_slow += 20
+    if adx(df_weekly).iloc[-1] > 20:
+        score_slow += 10
+    if df_monthly["Close"].iloc[-1] > df_monthly["Close"].rolling(50).mean().iloc[-1]:
+        score_slow += 20
 
-    if price_trend > 0:
-        score += 15
-        reasons.append("Short Uptrend")
+    trend_strength = (df_daily["Close"].iloc[-1] / df_daily["Close"].iloc[-5] - 1) * 100
+    if trend_strength > 0:
+        score_fast += 10
 
-    if latest["close"] <= latest["support"] * 1.06:
-        score += 15
-        reasons.append("Near Support")
+    # ================= FINAL SCORE =================
+    score = score_fast + score_slow
 
-    if latest["rsi"] < 50:
-        score += 10
-        reasons.append("RSI OK")
+    # ================= AI =================
+    if model:
+        features = np.array([[
+            last["rsi"],
+            last["macd"],
+            last["Volume"] / (last["vol_ma"] + 1e-9),
+            trend_strength
+        ]])
+        prob = model.predict_proba(features)[0][1]
+    else:
+        prob = 0.5 + (score / 200)
 
-    if latest["macd"] > latest["signal"]:
-        score += 10
-        reasons.append("MACD Positive")
-
-    if latest["close"] > latest["vwap"]:
-        score += 10
-        reasons.append("Above VWAP")
-
-    if latest["volume"] > df["volume"].mean() * 0.7:
-        score += 10
-        reasons.append("Volume Active")
-
-    if adx > 15:
-        score += 10
-        reasons.append("Trend Exists")
-
-    if df["obv"].iloc[-1] > df["obv"].mean():
-        score += 10
-        reasons.append("OBV Strength")
-
-    score += 5 if market_open else 8
-
-    if score >= 70:
-        signal = "🔥 فرصة قوية"
-    elif score >= 55:
+    # ================= SIGNAL =================
+    if score >= 80:
+        signal = "🔥 قوية جداً"
+    elif score >= 60:
         signal = "🟢 فرصة"
-    elif score >= 40:
+    elif score >= 45:
         signal = "⚠️ متابعة"
     else:
         signal = "🟡 ضعيف"
 
-    return signal, score, reasons
+    return score, prob, signal
 
 
 # =========================
-# 🎯 RISK MANAGEMENT
+# ⚙️ PROCESS
 # =========================
-def risk_management(df):
-
-    latest = df.iloc[-1]
-
-    entry = latest["close"]
-    atr = latest["atr"]
-    resistance = latest["resistance"]
-
-    if pd.isna(atr):
-        return None
-
-    sl = entry - (1.5 * atr)
-
-    risk = entry - sl
-
-    tp1 = entry + risk
-    tp2 = entry + (risk * 2)
-
-    tp3 = entry + (risk * 3) if resistance <= entry else resistance
-
-    return entry, sl, tp1, tp2, tp3
-
-
-# =========================
-# ⚙️ PROCESS STOCK
-# =========================
-def process_stock(row, market_open):
+def process(symbol, daily, weekly, monthly, model):
 
     try:
-        symbol = row["symbol"]
-        name = row["name"]
-        sector = row["sector"]
+        d = daily[symbol].dropna()
+        w = weekly[symbol].dropna()
+        m = monthly[symbol].dropna()
 
-        df = get_data(symbol)
+        d = add_indicators(d)
+        w = add_indicators(w)
+        m = add_indicators(m)
 
-        if df is None:
-            return None
+        score, prob, signal = analyze(d, w, m, model)
 
-        df = add_indicators(df)
+        last = d.iloc[-1]
 
-        if not smart_filter(df):
-            return None
-
-        signal, score, reasons = analyze(df, market_open)
-
-        if score < 25:
-            return None
-
-        risk = risk_management(df)
-        if risk is None:
-            return None
-
-        entry, sl, tp1, tp2, tp3 = risk
+        entry = last["Close"]
+        sl = entry - (last["Close"] - d["Low"].rolling(20).min().iloc[-1]) * 0.5
+        tp = entry + (entry - sl) * 2
 
         return {
-            "Symbol": symbol,
-            "Name": name,
-            "Sector": sector,
+            "Symbol": symbol.replace(".CA",""),
+            "Score": round(score,2),
             "Signal": signal,
-            "Score": round(score, 2),
-            "Entry": round(entry, 3),
-            "SL": round(sl, 3),
-            "TP1": round(tp1, 3),
-            "TP2": round(tp2, 3),
-            "TP3": round(tp3, 3),
-            "Reasons": ", ".join(reasons)
+            "Probability": round(prob*100,2),
+            "Entry": round(entry,2),
+            "SL": round(sl,2),
+            "TP": round(tp,2)
         }
 
     except:
@@ -307,92 +193,40 @@ def process_stock(row, market_open):
 # =========================
 # 🚀 MAIN ENGINE
 # =========================
-results = []
+if st.button("🚀 RUN HYBRID SCAN"):
 
-stocks = get_all_stocks()   # ✅ FIX: تعريف ثابت خارج الزر
-market_open = is_market_open()
+    model = load_ai()
 
-if st.button("🚀 SCAN EGX RANKING ENGINE"):
+    daily = load_data(EGX, "6mo", "1d")
+    weekly = load_data(EGX, "1y", "1wk")
+    monthly = load_data(EGX, "5y", "1mo")
 
-    st.info("🟢 Market Open Mode" if market_open else "🔵 Market Closed Mode")
+    results = []
 
-    progress = st.progress(0)
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-
+    with ThreadPoolExecutor(max_workers=8) as ex:
         futures = [
-            executor.submit(process_stock, row, market_open)
-            for row in stocks.to_dict("records")
+            ex.submit(process, s, daily, weekly, monthly, model)
+            for s in EGX
         ]
 
-        for i, f in enumerate(futures):
+        for f in futures:
+            r = f.result()
+            if r:
+                results.append(r)
 
-            try:
-                res = f.result(timeout=10)
-                if res:
-                    results.append(res)
-            except:
-                pass
+    if results:
+        df = pd.DataFrame(results)
+        df = df.sort_values("Score", ascending=False)
 
-            progress.progress((i + 1) / len(futures))
+        st.success("🔥 HYBRID RESULTS READY")
 
+        st.subheader("🏆 TOP OPPORTUNITIES")
+        st.dataframe(df, use_container_width=True)
 
-# =========================
-# 📊 RANKING ALWAYS ON
-# =========================
-
-if results:
-    df_res = pd.DataFrame(results)
-else:
-    st.warning("⚠️ No strong signals → switching to MARKET RANKING MODE")
-
-    fallback = []
-
-    for row in stocks.to_dict("records")[:80]:
-
-        try:
-            df = get_data(row["symbol"])
-            if df is None:
-                continue
-
-            df = add_indicators(df)
-
-            signal, score, reasons = analyze(df, False)
-
-            fallback.append({
-                "Symbol": row["symbol"],
-                "Name": row["name"],
-                "Sector": row["sector"],
-                "Score": float(score),
-                "Signal": signal,
-                "Reasons": ", ".join(reasons) if isinstance(reasons, list) else ""
-            })
-
-        except:
-            continue
-
-    df_res = pd.DataFrame(fallback)
-
-
-# =========================
-# 🏆 OUTPUT ALWAYS
-# =========================
-
-if df_res is not None and not df_res.empty:
-
-    top20 = df_res.sort_values("Score", ascending=False).head(20)
-    best_sector = df_res.sort_values("Score", ascending=False).groupby("Sector").head(1)
-
-    st.success("🔥 MARKET RANKING READY")
-
-    st.subheader("🏆 Top 20 Stocks")
-    st.dataframe(top20, use_container_width=True)
-
-    st.subheader("📊 Best Per Sector")
-    st.dataframe(best_sector, use_container_width=True)
-
-    csv = df_res.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV", csv, "egx_ranking.csv", "text/csv")
-
-else:
-    st.error("❌ No data available")
+        st.download_button(
+            "⬇️ Download",
+            df.to_csv(index=False),
+            "hybrid_egx.csv"
+        )
+    else:
+        st.warning("No signals found")
