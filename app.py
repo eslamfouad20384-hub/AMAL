@@ -109,7 +109,6 @@ def ai_confidence(last_d, last_w, last_m, adx_val, atr_val):
     score = 0
     total = 0
 
-    # TREND
     total += 3
     if last_d["Close"] > last_d["ema200"]:
         score += 1
@@ -118,41 +117,25 @@ def ai_confidence(last_d, last_w, last_m, adx_val, atr_val):
     if last_m["Close"] > last_m["ema200"]:
         score += 1
 
-    # MOMENTUM
     total += 2
     if last_d["macd"] > 0:
         score += 1
     if 45 < last_d["rsi"] < 65:
         score += 1
 
-    # VOLUME
     total += 1
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 1
 
-    # TREND STRENGTH
     total += 1
     if adx_val > 20:
         score += 1
 
-    # RISK QUALITY
     total += 1
     if atr_val / last_d["Close"] < 0.05:
         score += 1
 
     return score / total
-
-# =========================
-# 🎯 SMART PROBABILITY
-# =========================
-def smart_probability(conf, target, entry):
-
-    distance = abs(target - entry) / entry
-    distance_factor = max(0.3, 1 - distance)
-
-    prob = conf * distance_factor
-
-    return round(min(0.95, prob), 2)
 
 # =========================
 # 🧠 REGIME
@@ -196,7 +179,6 @@ def analyze(df_d, df_w, df_m):
 
     score = 0
 
-    # TREND
     if last_d["Close"] > last_d["ema200"]:
         score += 15
     if last_w["Close"] > last_w["ema200"]:
@@ -204,13 +186,11 @@ def analyze(df_d, df_w, df_m):
     if last_m["Close"] > last_m["ema200"]:
         score += 15
 
-    # MOMENTUM
     if 45 < last_d["rsi"] < 65:
         score += 8
     if last_d["macd"] > 0:
         score += 6
 
-    # VOLUME
     if last_d["Volume"] > last_d["vol_ma"]:
         score += 8
 
@@ -222,24 +202,41 @@ def analyze(df_d, df_w, df_m):
     if "قوي" in regime:
         score += 6
 
-    # RISK
     risk = atr_val / entry
     if risk < 0.05:
         score += 5
     else:
         score -= 5
 
-    # TARGETS
+    # =========================
+    # 🎯 TARGET ENGINE (FINAL)
+    # =========================
+
     support = last_d["support"]
     resistance = last_d["resistance"]
 
-    sl = entry - atr_val * 1.5
+    volatility = atr_val / entry
 
-    tp1 = entry + atr_val * 2
-    tp2 = entry + atr_val * 4
-    tp3 = max(resistance, entry + atr_val * 6, entry * 1.20)
+    if last_d["Close"] > last_d["ema200"]:
+        trend_dir = "UP"
+        t1 = entry + atr_val * 1
+        t2 = entry + atr_val * 2
+        t3 = max(resistance, entry + atr_val * 3)
+        stop = max(support, entry - atr_val * 1.2)
+    else:
+        trend_dir = "DOWN"
+        t1 = entry - atr_val * 1
+        t2 = entry - atr_val * 2
+        t3 = min(support, entry - atr_val * 3)
+        stop = min(resistance, entry + atr_val * 1.2)
 
-    # AI CONFIDENCE
+    if volatility > 0.05:
+        time_est = "1 - 3 weeks"
+    elif volatility > 0.02:
+        time_est = "3 - 8 weeks"
+    else:
+        time_est = "2 - 4 months"
+
     conf = ai_confidence(last_d, last_w, last_m, adx_val, atr_val)
 
     return {
@@ -248,15 +245,18 @@ def analyze(df_d, df_w, df_m):
         "Regime": regime,
 
         "Entry": round(entry,2),
-        "SL": round(sl,2),
+        "SL": round(stop,2),
 
-        "TP1": round(tp1,2),
-        "TP2": round(tp2,2),
-        "TP3": round(tp3,2),
+        "TP1": round(t1,2),
+        "TP2": round(t2,2),
+        "TP3": round(t3,2),
 
-        "Prob_TP1": smart_probability(conf, tp1, entry),
-        "Prob_TP2": smart_probability(conf, tp2, entry),
-        "Prob_TP3": smart_probability(conf, tp3, entry),
+        "Prob_TP1": round(conf,2),
+        "Prob_TP2": round(conf * 0.9,2),
+        "Prob_TP3": round(conf * 0.8,2),
+
+        "Time_Est": time_est,
+        "Trend_Dir": trend_dir
     }
 
 # =========================
