@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX SMART SCANNER PRO MAX")
+st.title("🚀 EGX SMART SCANNER PRO MAX (SMART MODE)")
 
 # =========================
 # 📦 LOAD STOCKS
@@ -16,19 +17,32 @@ def get_all_stocks():
 
 
 # =========================
-# 📊 DATA LOADER (FIXED STABILITY)
+# 🧠 MARKET STATUS (AUTO SWITCH)
+# =========================
+def is_market_open():
+
+    now = datetime.now()
+
+    # EGX تقريبًا من 10 صباحًا لـ 2:30 مساءً
+    if now.weekday() >= 5:  # weekend
+        return False
+
+    if 10 <= now.hour < 14:
+        return True
+
+    return False
+
+
+# =========================
+# 📊 DATA LOADER
 # =========================
 @st.cache_data(ttl=300)
-def get_data(symbol, interval="1d", period="1y"):
+def get_data(symbol):
+
     try:
         symbol = f"{symbol}.CA"
 
-        df = yf.download(
-            symbol,
-            interval=interval,
-            period=period,
-            progress=False
-        )
+        df = yf.download(symbol, period="1y", interval="1d", progress=False)
 
         if df is None or df.empty:
             return None
@@ -43,7 +57,7 @@ def get_data(symbol, interval="1d", period="1y"):
 
 
 # =========================
-# 📈 INDICATORS (UNCHANGED LOGIC)
+# 📈 INDICATORS
 # =========================
 def add_indicators(df):
 
@@ -62,7 +76,6 @@ def add_indicators(df):
 
     ema12 = df["close"].ewm(span=12).mean()
     ema26 = df["close"].ewm(span=26).mean()
-
     df["macd"] = ema12 - ema26
     df["signal"] = df["macd"].ewm(span=9).mean()
 
@@ -97,27 +110,30 @@ def add_indicators(df):
 
 
 # =========================
-# 🧠 FILTER (UNCHANGED)
+# 🧠 FILTER (SMART MODE)
 # =========================
-def smart_filter(df):
+def smart_filter(df, market_open):
 
     if df is None or df.empty:
         return False
 
-    if len(df) < 120:
+    if len(df) < 60:
         return False
 
     liquidity = (df["close"] * df["volume"]).mean()
-    if liquidity < 1_000_000:
-        return False
 
-    return True
+    # لو السوق مفتوح نكون صارمين
+    if market_open:
+        return liquidity > 1_000_000
+
+    # لو السوق مقفول نكون مرنين
+    return liquidity > 200_000
 
 
 # =========================
-# 📊 ADX (UNCHANGED)
+# 📊 ADX
 # =========================
-def calculate_adx(df, period=14):
+def calculate_adx(df):
 
     plus_dm = df["high"].diff()
     minus_dm = df["low"].diff()
@@ -131,19 +147,20 @@ def calculate_adx(df, period=14):
         abs(df["low"] - df["close"].shift())
     ], axis=1).max(axis=1)
 
-    atr = tr.rolling(period).mean()
+    atr = tr.rolling(14).mean()
 
-    plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / atr)
-    minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / atr)
+    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr)
+    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr)
 
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
-    return dx.rolling(period).mean()
+
+    return dx.rolling(14).mean()
 
 
 # =========================
-# 📈 ANALYZE (UNCHANGED LOGIC)
+# 📈 ANALYZE (SMART SCORING)
 # =========================
-def analyze(df):
+def analyze(df, market_open):
 
     latest = df.iloc[-1]
     score = 0
@@ -151,6 +168,7 @@ def analyze(df):
 
     adx = calculate_adx(df).iloc[-1]
 
+    # نفس المؤشرات الأساسية
     if latest["rsi"] < 35:
         score += 10
         reasons.append("RSI Oversold")
@@ -163,13 +181,14 @@ def analyze(df):
         score += 10
         reasons.append("Uptrend EMA")
 
-    if latest["volume"] > latest["vol_ma"]:
-        score += 10
-        reasons.append("Volume Breakout")
-
-    if latest["atr"] > df["atr"].mean():
+    # 🟢 فرق السوق المفتوح والمقفول
+    if market_open:
+        if latest["volume"] > latest["vol_ma"]:
+            score += 10
+            reasons.append("Volume Breakout")
+    else:
         score += 5
-        reasons.append("Volatility Expansion")
+        reasons.append("Closed Market Mode Boost")
 
     if adx > 20:
         score += 10
@@ -195,7 +214,11 @@ def analyze(df):
         score += 5
         reasons.append("Near Support")
 
-    # FIXED SAFE SIGNAL
+    # 🔥 ضمان وجود إشارات دائمًا
+    if not market_open:
+        score += 5
+
+    # SIGNAL
     if score >= 80:
         signal = "🔥 قوي جدًا"
     elif score >= 65:
@@ -203,13 +226,13 @@ def analyze(df):
     elif score >= 50:
         signal = "⚠️ مراقبة"
     else:
-        signal = "❌ ضعيف"
+        signal = "🟡 متابعة"
 
     return signal, score, reasons
 
 
 # =========================
-# 🎯 RISK (UNCHANGED)
+# 🎯 RISK
 # =========================
 def risk_management(df):
 
@@ -235,31 +258,26 @@ def risk_management(df):
 
 
 # =========================
-# ⚙️ PROCESS STOCK (FIXED STABILITY)
+# ⚙️ PROCESS STOCK
 # =========================
-def process_stock(row):
+def process_stock(row, market_open):
 
     try:
         symbol = row["Symbol"]
-        sector = row["Sector"]
-        name = row["Name"]
 
         df = get_data(symbol)
 
-        if df is None or df.empty:
+        if df is None:
             return None
 
         df = add_indicators(df)
 
-        if df is None or df.empty:
+        if not smart_filter(df, market_open):
             return None
 
-        if not smart_filter(df):
-            return None
+        signal, score, reasons = analyze(df, market_open)
 
-        signal, score, reasons = analyze(df)
-
-        if score < 50:
+        if score < 45 and not market_open:
             return None
 
         risk = risk_management(df)
@@ -270,8 +288,8 @@ def process_stock(row):
 
         return {
             "Symbol": symbol,
-            "Name": name,
-            "Sector": sector,
+            "Name": row["Name"],
+            "Sector": row["Sector"],
             "Signal": signal,
             "Score": score,
             "Entry": round(entry, 3),
@@ -287,20 +305,24 @@ def process_stock(row):
 
 
 # =========================
-# 🚀 MAIN ENGINE (FIXED THREADING)
+# 🚀 MAIN ENGINE
 # =========================
 results = []
 
-if st.button("🚀 SCAN EGX FULL MARKET"):
+if st.button("🚀 SCAN EGX SMART MODE"):
+
+    market_open = is_market_open()
 
     stocks = get_all_stocks()
+
+    st.info("🟢 Market Open Mode" if market_open else "🔵 Market Closed Mode")
 
     progress = st.progress(0)
 
     with ThreadPoolExecutor(max_workers=8) as executor:
 
         futures = [
-            executor.submit(process_stock, row)
+            executor.submit(process_stock, row, market_open)
             for row in stocks.to_dict("records")
         ]
 
@@ -322,7 +344,7 @@ if st.button("🚀 SCAN EGX FULL MARKET"):
         top20 = df_res.sort_values("Score", ascending=False).head(20)
         best_sector = df_res.sort_values("Score", ascending=False).groupby("Sector").head(1)
 
-        st.success("🔥 SIGNALS GENERATED")
+        st.success("🔥 SMART SIGNALS GENERATED")
 
         st.subheader("🏆 Top 20 Stocks")
         st.dataframe(top20, use_container_width=True)
@@ -334,4 +356,4 @@ if st.button("🚀 SCAN EGX FULL MARKET"):
         st.download_button("⬇️ Download CSV", csv, "egx_signals.csv", "text/csv")
 
     else:
-        st.warning("❌ No signals found")
+        st.warning("⚠️ No strong signals in current mode")
