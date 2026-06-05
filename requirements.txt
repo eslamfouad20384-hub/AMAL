@@ -4,4 +4,4 @@ numpy
 yfinance
 ta
 scikit-learn
-joblib
+plotly
