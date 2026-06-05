@@ -22,6 +22,7 @@ def get_all_stocks():
 def get_data(symbol, interval="1d", period="1y"):
     try:
         symbol = f"{symbol}.CA"
+
         df = yf.download(symbol, interval=interval, period=period, progress=False)
 
         if df is None or df.empty:
@@ -77,31 +78,33 @@ def add_indicators(df):
     df["support"] = df["low"].rolling(20).min()
     df["resistance"] = df["high"].rolling(20).max()
 
-    # OBV (correct)
-    df["obv"] = (np.where(df["close"] > df["close"].shift(1), df["volume"],
-                 np.where(df["close"] < df["close"].shift(1), -df["volume"], 0))).cumsum()
+    # OBV
+    df["obv"] = (np.where(
+        df["close"] > df["close"].shift(1), df["volume"],
+        np.where(df["close"] < df["close"].shift(1), -df["volume"], 0)
+    )).cumsum()
 
     # VWAP
     tp = (df["high"] + df["low"] + df["close"]) / 3
     df["vwap"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
-    # MFI (Money Flow Index simplified but stable)
+    # MFI (simple stable)
     mf = tp * df["volume"]
     df["mfi"] = 100 - (100 / (1 + mf.rolling(14).mean() / (mf.rolling(14).mean() + 1e-9)))
 
-    # Stochastic RSI (simplified)
+    # Stoch RSI
     rsi_min = df["rsi"].rolling(14).min()
     rsi_max = df["rsi"].rolling(14).max()
     df["stoch_rsi"] = (df["rsi"] - rsi_min) / (rsi_max - rsi_min + 1e-9)
 
-    df = df.dropna()
-    return df
+    return df.dropna()
 
 
 # =========================
 # 🧠 FILTER
 # =========================
 def smart_filter(df):
+
     if df is None or df.empty:
         return False
 
@@ -119,6 +122,7 @@ def smart_filter(df):
 # 📊 ADX
 # =========================
 def calculate_adx(df, period=14):
+
     plus_dm = df["high"].diff()
     minus_dm = df["low"].diff()
 
@@ -141,7 +145,7 @@ def calculate_adx(df, period=14):
 
 
 # =========================
-# 📈 ANALYZE (SCORE 100)
+# 📈 ANALYZE
 # =========================
 def analyze(df):
 
@@ -151,73 +155,65 @@ def analyze(df):
 
     adx = calculate_adx(df).iloc[-1]
 
-    # RSI
     if latest["rsi"] < 35:
         score += 10
         reasons.append("RSI Oversold")
 
-    # MACD
     if latest["macd"] > latest["signal"]:
         score += 10
         reasons.append("MACD Bullish")
 
-    # EMA trend
     if latest["ema50"] > latest["ema200"]:
         score += 10
         reasons.append("Uptrend EMA")
 
-    # Volume breakout
     if latest["volume"] > latest["vol_ma"]:
         score += 10
         reasons.append("Volume Breakout")
 
-    # ATR expansion
     if latest["atr"] > df["atr"].mean():
         score += 5
         reasons.append("Volatility Expansion")
 
-    # ADX trend strength
     if adx > 20:
         score += 10
-        reasons.append("Trend Strength ADX")
+        reasons.append("ADX Trend Strength")
 
-    # OBV
     if df["obv"].iloc[-1] > df["obv"].mean():
         score += 10
         reasons.append("OBV Strength")
 
-    # VWAP
     if latest["close"] > latest["vwap"]:
         score += 10
         reasons.append("Above VWAP")
 
-    # MFI
     if latest["mfi"] < 50:
         score += 10
         reasons.append("Money Flow Entry")
 
-    # Stoch RSI
     if latest["stoch_rsi"] < 0.2:
         score += 10
         reasons.append("Stoch Oversold")
 
-    # Support zone
     if latest["close"] <= latest["support"] * 1.02:
         score += 5
         reasons.append("Near Support")
 
-    signal = (
-        "🔥 قوي جدًا" if score >= 80 else
-        "🟢 فرصة" if score >= 65 else
-        "⚠️ مراقبة" else
-        "❌ ضعيف"
-    )
+    # ✅ FIXED SIGNAL LOGIC
+    if score >= 80:
+        signal = "🔥 قوي جدًا"
+    elif score >= 65:
+        signal = "🟢 فرصة"
+    elif score >= 50:
+        signal = "⚠️ مراقبة"
+    else:
+        signal = "❌ ضعيف"
 
     return signal, score, reasons
 
 
 # =========================
-# 🎯 RISK MANAGEMENT
+# 🎯 RISK
 # =========================
 def risk_management(df):
 
@@ -231,6 +227,7 @@ def risk_management(df):
         return None
 
     sl = entry - (1.5 * atr)
+
     risk = entry - sl
 
     tp1 = entry + risk
@@ -291,7 +288,7 @@ def process_stock(row):
 
 
 # =========================
-# 🚀 MAIN ENGINE
+# 🚀 MAIN
 # =========================
 results = []
 
