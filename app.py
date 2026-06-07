@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v6 (HYBRID INSTITUTIONAL ENGINE)")
+st.title("🚀 EGX AI PRO MAX v7 (QUANTUM INSTITUTIONAL ENGINE)")
 
 # =========================
 # 📌 EGX STOCKS
@@ -56,20 +56,34 @@ def levels(df):
     return df["Low"].rolling(20).min().iloc[-1], df["High"].rolling(20).max().iloc[-1]
 
 # =========================
-# 🌍 MARKET REGIME (NEW)
+# 🌍 MARKET REGIME
 # =========================
 def market_regime(df):
     trend = df["Close"].iloc[-1] > df["ema200"].iloc[-1]
     strength = df["adx"].iloc[-1]
 
-    if trend and strength > 20:
+    if trend and strength > 22:
         return "BULL"
-    elif not trend and strength > 20:
+    elif not trend and strength > 22:
         return "BEAR"
     return "SIDEWAYS"
 
 # =========================
-# 🧠 GLOBAL ML MODEL (NEW)
+# 🧠 SMART MONEY FLOW (NEW)
+# =========================
+def smart_money(df):
+    vol = df["Volume"].iloc[-1]
+    vol_ma = df["vol_ma"].iloc[-1]
+    price_trend = df["Close"].iloc[-1] > df["ema50"].iloc[-1]
+
+    if vol > vol_ma and price_trend:
+        return 1
+    elif vol > vol_ma:
+        return 0.5
+    return 0
+
+# =========================
+# 🧠 GLOBAL ML
 # =========================
 ML_MODEL = None
 ML_FEATURES = ["ema20","ema50","ema200","rsi","macd","adx","atr","Volume"]
@@ -79,10 +93,9 @@ def train_global_ml(data):
 
     frames = []
 
-    for symbol in EGX:
+    for s in EGX:
         try:
-            df = data[symbol].copy()
-            df = add_indicators(df)
+            df = add_indicators(data[s].copy())
 
             df["future"] = df["Close"].pct_change(3).shift(-3)
             df["target"] = (df["future"] > 0).astype(int)
@@ -100,8 +113,8 @@ def train_global_ml(data):
     y = full["target"]
 
     model = RandomForestClassifier(
-        n_estimators=120,
-        max_depth=7,
+        n_estimators=150,
+        max_depth=8,
         random_state=42
     )
 
@@ -113,9 +126,22 @@ def train_global_ml(data):
 def ml_predict(row):
     if ML_MODEL is None:
         return 0.5
-
     X = pd.DataFrame([row[ML_FEATURES]])
     return ML_MODEL.predict_proba(X)[0][1]
+
+# =========================
+# 🧠 PORTFOLIO ENGINE (NEW)
+# =========================
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = {}
+
+def update_portfolio(symbol, signal, entry):
+    if signal == "🔥 قوي جداً":
+        if symbol not in st.session_state.portfolio:
+            st.session_state.portfolio[symbol] = {
+                "entry": entry,
+                "status": "OPEN"
+            }
 
 # =========================
 # 🧠 ANALYZE
@@ -131,7 +157,7 @@ def analyze(df):
     support, resistance = levels(df)
     regime = market_regime(df)
 
-    # ===== TREND SCORE =====
+    # ===== BASE SCORE =====
     score = 0
 
     if last["Close"] > last["ema200"]:
@@ -140,45 +166,53 @@ def analyze(df):
         score += 1
     if last["macd"] > 0:
         score += 1
-    if last["rsi"] > 50:
+    if last["rsi"] > 52:
         score += 1
     if last["adx"] > 20:
         score += 1
-    if last["Volume"] > last["vol_ma"]:
-        score += 1
 
-    # ===== REGIME ADJUSTMENT =====
+    # ===== SMART MONEY =====
+    score += smart_money(df)
+
+    # ===== REGIME IMPACT =====
     if regime == "BEAR":
         score -= 2
     elif regime == "SIDEWAYS":
         score -= 1
 
-    # ===== FILTER =====
-    if (atr / entry) < 0.012:
+    # ===== RISK FILTER =====
+    risk = atr / entry
+    if risk > 0.06:
         return None
 
     # ===== ML =====
     ml_prob = ml_predict(last)
 
-    final_conf = (score / 6) * 0.6 + ml_prob * 0.4
+    # ===== FINAL CONFIDENCE =====
+    final_conf = (score / 6) * 0.55 + ml_prob * 0.35 + smart_money(df) * 0.1
 
     # ===== SIGNAL =====
-    if final_conf > 0.75:
+    if final_conf > 0.78:
         signal = "🔥 قوي جداً"
-    elif final_conf > 0.6:
+    elif final_conf > 0.65:
         signal = "🟢 قوي"
     else:
         signal = "⚠️ ضعيف"
 
+    # ===== POSITION SIZING (NEW) =====
+    position_size = max(5, min(25, final_conf * 30))
+
     # ===== TARGETS =====
     tp1 = entry + atr * 1.2
-    tp2 = entry + atr * 2
-    tp3 = entry + atr * 3
+    tp2 = entry + atr * 2.2
+    tp3 = entry + atr * 3.2
+    sl = entry - atr * 1.6
 
-    sl = entry - atr * 1.5
+    # ===== PORTFOLIO UPDATE =====
+    update_portfolio(df, signal, entry)
 
     return {
-        "Symbol": df.iloc[-1].name if "Symbol" in df else "",
+        "Symbol": "",
         "Score": round(score,2),
         "ML": round(ml_prob,2),
         "Confidence": round(final_conf,2),
@@ -191,6 +225,7 @@ def analyze(df):
         "TP2": round(tp2,2),
         "TP3": round(tp3,2),
 
+        "Position_%": round(position_size,2),
         "ADX": round(last["adx"],2),
         "ATR": round(atr,2),
         "Support": round(support,2),
@@ -206,7 +241,7 @@ def process(symbol, data):
             return None
 
         df = data[symbol].dropna()
-        if len(df) < 50:
+        if len(df) < 80:
             return None
 
         res = analyze(df)
@@ -222,7 +257,7 @@ def process(symbol, data):
 # =========================
 # 🚀 RUN
 # =========================
-if st.button("🚀 RUN v6 ENGINE"):
+if st.button("🚀 RUN v7 QUANTUM ENGINE"):
 
     data = load_data(EGX, "1y", "1d")
 
@@ -242,14 +277,20 @@ if st.button("🚀 RUN v6 ENGINE"):
         df = pd.DataFrame(results)
         df = df.sort_values("Confidence", ascending=False)
 
-        st.success("🔥 v6 READY - INSTITUTIONAL MODE")
+        st.success("🚀 v7 QUANTUM ENGINE ACTIVE")
 
         st.dataframe(df, use_container_width=True)
+
+        # =========================
+        # 📊 PORTFOLIO VIEW
+        # =========================
+        st.subheader("📊 Portfolio (Auto Tracking)")
+        st.write(st.session_state.portfolio)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_ai_pro_max_v6.csv"
+            "egx_ai_pro_max_v7.csv"
         )
 
     else:
