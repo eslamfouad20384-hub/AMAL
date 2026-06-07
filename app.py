@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v5 (SMART AI + ML ENGINE)")
+st.title("🚀 EGX AI PRO MAX v6 (HYBRID INSTITUTIONAL ENGINE)")
 
 # =========================
 # 📌 EGX STOCKS
@@ -18,7 +18,7 @@ EGX = [
 ]
 
 # =========================
-# 📊 LOAD DATA
+# 📊 DATA
 # =========================
 @st.cache_data(ttl=3600)
 def load_data(symbols, period, interval):
@@ -26,7 +26,7 @@ def load_data(symbols, period, interval):
                         group_by="ticker", threads=True, auto_adjust=True)
 
 # =========================
-# 📈 INDICATORS FIXED
+# 📈 INDICATORS
 # =========================
 def add_indicators(df):
     df = df.copy()
@@ -42,127 +42,145 @@ def add_indicators(df):
 
     df["rsi"] = ta.momentum.RSIIndicator(close).rsi()
     df["macd"] = ta.trend.MACD(close).macd()
-
-    df["vol_ma"] = vol.rolling(20).mean()
-
+    df["adx"] = ta.trend.ADXIndicator(high, low, close).adx()
     df["atr"] = ta.volatility.AverageTrueRange(high, low, close).average_true_range()
 
-    adx_indicator = ta.trend.ADXIndicator(high, low, close)
-    df["adx"] = adx_indicator.adx()
+    df["vol_ma"] = vol.rolling(20).mean()
 
     return df
 
 # =========================
-# 📊 SUPPORT / RESISTANCE FIXED
+# 📊 LEVELS
 # =========================
 def levels(df):
-    support = df["Low"].rolling(20).min().iloc[-1]
-    resistance = df["High"].rolling(20).max().iloc[-1]
-    return support, resistance
+    return df["Low"].rolling(20).min().iloc[-1], df["High"].rolling(20).max().iloc[-1]
 
 # =========================
-# 🧠 SIDEWAYS FILTER
+# 🌍 MARKET REGIME (NEW)
 # =========================
-def is_sideways(df):
-    atr_pct = df["atr"].iloc[-1] / df["Close"].iloc[-1]
-    return atr_pct < 0.015  # سوق هادي جدًا
+def market_regime(df):
+    trend = df["Close"].iloc[-1] > df["ema200"].iloc[-1]
+    strength = df["adx"].iloc[-1]
+
+    if trend and strength > 20:
+        return "BULL"
+    elif not trend and strength > 20:
+        return "BEAR"
+    return "SIDEWAYS"
 
 # =========================
-# 🧠 ML MODEL (simple training)
+# 🧠 GLOBAL ML MODEL (NEW)
 # =========================
-def train_ml(df):
-    df = df.copy()
+ML_MODEL = None
+ML_FEATURES = ["ema20","ema50","ema200","rsi","macd","adx","atr","Volume"]
 
-    df["future_ret"] = df["Close"].pct_change(3).shift(-3)
-    df["target"] = (df["future_ret"] > 0).astype(int)
+def train_global_ml(data):
+    global ML_MODEL
 
-    features = ["ema20","ema50","ema200","rsi","macd","adx","atr","Volume"]
-    df = df.dropna()
+    frames = []
 
-    X = df[features]
-    y = df["target"]
+    for symbol in EGX:
+        try:
+            df = data[symbol].copy()
+            df = add_indicators(df)
 
-    if len(df) < 100:
+            df["future"] = df["Close"].pct_change(3).shift(-3)
+            df["target"] = (df["future"] > 0).astype(int)
+
+            frames.append(df)
+        except:
+            continue
+
+    full = pd.concat(frames).dropna()
+
+    if len(full) < 500:
         return None
 
-    model = RandomForestClassifier(n_estimators=80, max_depth=6, random_state=42)
+    X = full[ML_FEATURES]
+    y = full["target"]
+
+    model = RandomForestClassifier(
+        n_estimators=120,
+        max_depth=7,
+        random_state=42
+    )
+
     model.fit(X, y)
+    ML_MODEL = model
 
-    return model, features
+    return model
 
-# =========================
-# 🧠 PREDICT SIGNAL
-# =========================
-def ml_predict(model_pack, last_row):
-    if model_pack is None:
+def ml_predict(row):
+    if ML_MODEL is None:
         return 0.5
 
-    model, features = model_pack
-    X = pd.DataFrame([last_row[features]])
-    return model.predict_proba(X)[0][1]
+    X = pd.DataFrame([row[ML_FEATURES]])
+    return ML_MODEL.predict_proba(X)[0][1]
 
 # =========================
-# 🧠 ANALYZE ENGINE
+# 🧠 ANALYZE
 # =========================
 def analyze(df):
-    df = add_indicators(df)
 
+    df = add_indicators(df)
     last = df.iloc[-1]
 
     entry = last["Close"]
-    atr_val = last["atr"]
-    adx_val = last["adx"]
+    atr = last["atr"]
 
     support, resistance = levels(df)
+    regime = market_regime(df)
 
-    # ===== REGIME =====
-    trend_score = 0
+    # ===== TREND SCORE =====
+    score = 0
+
     if last["Close"] > last["ema200"]:
-        trend_score += 1
+        score += 1
     if last["ema20"] > last["ema50"]:
-        trend_score += 1
+        score += 1
     if last["macd"] > 0:
-        trend_score += 1
+        score += 1
     if last["rsi"] > 50:
-        trend_score += 1
+        score += 1
+    if last["adx"] > 20:
+        score += 1
+    if last["Volume"] > last["vol_ma"]:
+        score += 1
 
-    regime = "🚀 قوي" if trend_score >= 3 else "⚠️ ضعيف" if trend_score == 2 else "🔴 هابط"
+    # ===== REGIME ADJUSTMENT =====
+    if regime == "BEAR":
+        score -= 2
+    elif regime == "SIDEWAYS":
+        score -= 1
 
-    # ===== SIDEWAYS FILTER =====
-    if is_sideways(df):
+    # ===== FILTER =====
+    if (atr / entry) < 0.012:
         return None
 
-    # ===== SCORE =====
-    score = 0
-    score += trend_score * 20
-    score += 10 if adx_val > 20 else 0
-    score += 10 if last["Volume"] > last["vol_ma"] else 0
+    # ===== ML =====
+    ml_prob = ml_predict(last)
 
-    risk = atr_val / entry
-    score += 10 if risk < 0.04 else -10
+    final_conf = (score / 6) * 0.6 + ml_prob * 0.4
+
+    # ===== SIGNAL =====
+    if final_conf > 0.75:
+        signal = "🔥 قوي جداً"
+    elif final_conf > 0.6:
+        signal = "🟢 قوي"
+    else:
+        signal = "⚠️ ضعيف"
 
     # ===== TARGETS =====
-    ema_trend = (last["ema20"] - last["ema200"]) / entry
+    tp1 = entry + atr * 1.2
+    tp2 = entry + atr * 2
+    tp3 = entry + atr * 3
 
-    tp1 = entry + atr_val * 1.2
-    tp2 = entry + atr_val * 2.2
-    tp3 = max(resistance, entry + atr_val * (3 + abs(ema_trend) * 5))
-
-    sl = entry - atr_val * 1.6
-
-    # ===== ML MODEL =====
-    ml_model = train_ml(df)
-    ml_prob = ml_predict(ml_model, last)
-
-    # ===== FINAL CONFIDENCE =====
-    base_conf = score / 100
-    final_conf = (base_conf * 0.6) + (ml_prob * 0.4)
-
-    signal = "🔥 قوي جداً" if final_conf > 0.75 else "🟢 قوي" if final_conf > 0.6 else "⚠️ ضعيف"
+    sl = entry - atr * 1.5
 
     return {
+        "Symbol": df.iloc[-1].name if "Symbol" in df else "",
         "Score": round(score,2),
-        "ML_Prob": round(ml_prob,2),
+        "ML": round(ml_prob,2),
         "Confidence": round(final_conf,2),
         "Signal": signal,
         "Regime": regime,
@@ -173,8 +191,8 @@ def analyze(df):
         "TP2": round(tp2,2),
         "TP3": round(tp3,2),
 
-        "ADX": round(adx_val,2),
-        "ATR": round(atr_val,2),
+        "ADX": round(last["adx"],2),
+        "ATR": round(atr,2),
         "Support": round(support,2),
         "Resistance": round(resistance,2)
     }
@@ -184,12 +202,15 @@ def analyze(df):
 # =========================
 def process(symbol, data):
     try:
+        if symbol not in data:
+            return None
+
         df = data[symbol].dropna()
-        if df.empty:
+        if len(df) < 50:
             return None
 
         res = analyze(df)
-        if res is None:
+        if not res:
             return None
 
         res["Symbol"] = symbol.replace(".CA","")
@@ -201,14 +222,16 @@ def process(symbol, data):
 # =========================
 # 🚀 RUN
 # =========================
-if st.button("🚀 RUN AI PRO MAX v5"):
+if st.button("🚀 RUN v6 ENGINE"):
 
-    daily = load_data(EGX, "1y", "1d")
+    data = load_data(EGX, "1y", "1d")
+
+    train_global_ml(data)
 
     results = []
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = [ex.submit(process, s, daily) for s in EGX]
+        futures = [ex.submit(process, s, data) for s in EGX]
 
         for f in futures:
             r = f.result()
@@ -217,17 +240,17 @@ if st.button("🚀 RUN AI PRO MAX v5"):
 
     if results:
         df = pd.DataFrame(results)
-
         df = df.sort_values("Confidence", ascending=False)
 
-        st.success("🔥 v5 AI SYSTEM READY")
+        st.success("🔥 v6 READY - INSTITUTIONAL MODE")
 
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_ai_pro_max_v5.csv"
+            "egx_ai_pro_max_v6.csv"
         )
+
     else:
         st.warning("No strong signals found")
