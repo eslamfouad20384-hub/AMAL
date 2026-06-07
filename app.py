@@ -4,10 +4,9 @@ import numpy as np
 import yfinance as yf
 import ta
 from concurrent.futures import ThreadPoolExecutor
-from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-st.title("🚀 EGX AI PRO MAX v8 (INSTITUTIONAL BACKTEST + ML)")
+st.title("🚀 EGX AI PRO MAX v4 (AI SMART ENGINE)")
 
 # =========================
 # 📌 EGX STOCKS
@@ -18,21 +17,18 @@ EGX = [
 ]
 
 # =========================
-# 📊 DATA FIX (IMPORTANT)
+# 📊 DATA
 # =========================
 @st.cache_data(ttl=3600)
 def load_data(symbols, period, interval):
-    raw = yf.download(symbols, period=period, interval=interval,
-                      group_by="ticker", auto_adjust=True, threads=True)
-
-    data = {}
-    for s in symbols:
-        try:
-            df = raw[s].dropna()
-            data[s] = df
-        except:
-            continue
-    return data
+    return yf.download(
+        symbols,
+        period=period,
+        interval=interval,
+        group_by="ticker",
+        threads=True,
+        auto_adjust=True
+    )
 
 # =========================
 # 📈 INDICATORS
@@ -45,188 +41,271 @@ def add_indicators(df):
     low = df["Low"]
     vol = df["Volume"]
 
-    df["ema20"] = close.ewm(20).mean()
-    df["ema50"] = close.ewm(50).mean()
-    df["ema200"] = close.ewm(200).mean()
+    df["ema20"] = close.ewm(span=20).mean()
+    df["ema50"] = close.ewm(span=50).mean()
+    df["ema200"] = close.ewm(span=200).mean()
 
     df["rsi"] = ta.momentum.RSIIndicator(close).rsi()
     df["macd"] = ta.trend.MACD(close).macd()
-    df["adx"] = ta.trend.ADXIndicator(high, low, close).adx()
-    df["atr"] = ta.volatility.AverageTrueRange(high, low, close).average_true_range()
 
     df["vol_ma"] = vol.rolling(20).mean()
+
+    df["support"] = low.rolling(20).min()
+    df["resistance"] = high.rolling(20).max()
+
+    df["obv"] = ta.volume.OnBalanceVolumeIndicator(close, vol).on_balance_volume()
 
     return df
 
 # =========================
-# 📊 LEVELS
+# 📊 ATR
 # =========================
-def levels(df):
-    return (
-        df["Low"].rolling(20).min().iloc[-1],
-        df["High"].rolling(20).max().iloc[-1]
-    )
+def atr(df, period=14):
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
 
-# =========================
-# 🌍 REGIME
-# =========================
-def market_regime(df):
-    if df["Close"].iloc[-1] > df["ema200"].iloc[-1] and df["adx"].iloc[-1] > 20:
-        return "BULL"
-    if df["Close"].iloc[-1] < df["ema200"].iloc[-1] and df["adx"].iloc[-1] > 20:
-        return "BEAR"
-    return "SIDEWAYS"
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    return tr.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 🧠 SMART MONEY
+# 📊 ADX
 # =========================
-def smart_money(df):
-    return 1 if (
-        df["Volume"].iloc[-1] > df["vol_ma"].iloc[-1]
-        and df["Close"].iloc[-1] > df["ema50"].iloc[-1]
-    ) else 0
+def adx(df, period=14):
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
 
-# =========================
-# 🧠 ML GLOBAL (FIXED)
-# =========================
-ML_MODEL = None
-ML_FEATURES = ["ema20","ema50","ema200","rsi","macd","adx","atr"]
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
 
-def train_ml(data):
-    global ML_MODEL
+    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
+    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
 
-    frames = []
-    for s, df in data.items():
-        df = add_indicators(df)
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
 
-        df["future"] = df["Close"].pct_change(3).shift(-3)
-        df["target"] = (df["future"] > 0).astype(int)
+    atr_val = tr.ewm(alpha=1/period, adjust=False).mean()
 
-        frames.append(df)
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/period).mean() / (atr_val + 1e-9)
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/period).mean() / (atr_val + 1e-9)
 
-    full = pd.concat(frames).dropna()
-
-    split = int(len(full) * 0.8)
-    train = full.iloc[:split]
-
-    X = train[ML_FEATURES]
-    y = train["target"]
-
-    model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=8,
-        random_state=42
-    )
-
-    model.fit(X, y)
-    ML_MODEL = model
-
-    return model
-
-def ml_predict(row):
-    if ML_MODEL is None:
-        return 0.5
-    X = pd.DataFrame([row[ML_FEATURES]])
-    return ML_MODEL.predict_proba(X)[0][1]
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
+    return dx.ewm(alpha=1/period, adjust=False).mean()
 
 # =========================
-# 📊 BACKTEST ENGINE
+# 🧠 AI CONFIDENCE ENGINE
 # =========================
-def simple_backtest(df):
-    df = add_indicators(df).dropna()
+def ai_confidence(last_d, last_w, last_m, adx_val, atr_val):
 
-    wins = 0
-    trades = 0
-    returns = []
+    score = 0
+    total = 0
 
-    for i in range(100, len(df)-5):
-        entry = df["Close"].iloc[i]
-        future = df["Close"].iloc[i+5]
+    total += 3
+    if last_d["Close"] > last_d["ema200"]:
+        score += 1
+    if last_w["Close"] > last_w["ema200"]:
+        score += 1
+    if last_m["Close"] > last_m["ema200"]:
+        score += 1
 
-        ret = (future - entry) / entry
+    total += 2
+    if last_d["macd"] > 0:
+        score += 1
+    if 45 < last_d["rsi"] < 65:
+        score += 1
 
-        if ret > 0:
-            wins += 1
-        trades += 1
-        returns.append(ret)
+    total += 1
+    if last_d["Volume"] > last_d["vol_ma"]:
+        score += 1
 
-    winrate = wins / trades if trades else 0
-    avg_ret = np.mean(returns) if returns else 0
+    total += 1
+    if adx_val > 20:
+        score += 1
 
-    return winrate, avg_ret
+    total += 1
+    if atr_val / last_d["Close"] < 0.05:
+        score += 1
+
+    return score / total
 
 # =========================
-# 🧠 ANALYZE
+# 🧠 REGIME
 # =========================
-def analyze(df, symbol):
+def market_regime(last):
+    score = 0
+    if last["Close"] > last["ema200"]:
+        score += 1
+    if last["ema20"] > last["ema50"]:
+        score += 1
+    if last["macd"] > 0:
+        score += 1
+    if last["rsi"] > 50:
+        score += 1
 
-    df = add_indicators(df)
-    last = df.iloc[-1]
+    if score >= 4:
+        return "🚀 قوي جداً"
+    elif score == 3:
+        return "🟢 صعود"
+    elif score == 2:
+        return "⚠️ محايد"
+    return "🔴 هبوط"
 
-    entry = last["Close"]
-    atr = last["atr"]
+# =========================
+# 🧠 ENGINE
+# =========================
+def analyze(df_d, df_w, df_m):
 
-    support, resistance = levels(df)
-    regime = market_regime(df)
+    df_d = add_indicators(df_d)
+    df_w = add_indicators(df_w)
+    df_m = add_indicators(df_m)
+
+    last_d = df_d.iloc[-1]
+    last_w = df_w.iloc[-1]
+    last_m = df_m.iloc[-1]
+
+    entry = last_d["Close"]
+
+    atr_val = atr(df_d).iloc[-1]
+    adx_val = adx(df_d).iloc[-1]
 
     score = 0
 
-    if last["Close"] > last["ema200"]: score += 1
-    if last["ema20"] > last["ema50"]: score += 1
-    if last["macd"] > 0: score += 1
-    if last["rsi"] > 50: score += 1
-    if last["adx"] > 20: score += 1
+    if last_d["Close"] > last_d["ema200"]:
+        score += 15
+    if last_w["Close"] > last_w["ema200"]:
+        score += 12
+    if last_m["Close"] > last_m["ema200"]:
+        score += 15
 
-    score += smart_money(df)
+    if 45 < last_d["rsi"] < 65:
+        score += 8
+    if last_d["macd"] > 0:
+        score += 6
 
-    if regime == "BEAR":
-        score -= 2
-    elif regime == "SIDEWAYS":
-        score -= 1
+    if last_d["Volume"] > last_d["vol_ma"]:
+        score += 8
 
-    risk = atr / entry
-    if risk > 0.06:
-        return None
+    if adx_val > 20:
+        score += 10
 
-    ml_prob = ml_predict(last)
+    regime = market_regime(last_d)
 
-    confidence = (score/6)*0.5 + ml_prob*0.4 + smart_money(df)*0.1
+    if "قوي" in regime:
+        score += 6
 
-    signal = "🔥 قوي جداً" if confidence > 0.78 else "🟢 قوي" if confidence > 0.65 else "⚠️ ضعيف"
+    risk = atr_val / entry
+    if risk < 0.05:
+        score += 5
+    else:
+        score -= 5
 
-    tp1 = entry + atr*1.2
-    tp2 = entry + atr*2.2
-    sl = entry - atr*1.5
+    # =========================
+    # 🎯 ADVANCED TARGET ENGINE V2
+    # =========================
+
+    support = last_d["support"]
+    resistance = last_d["resistance"]
+
+    volatility = atr_val / entry
+    ema_trend = (last_d["ema20"] - last_d["ema200"]) / entry
+    adx_strength = adx_val / 100
+
+    # TP1 = scalping
+    tp1 = entry + atr_val * 0.8 if ema_trend > 0 else entry - atr_val * 0.8
+
+    # TP2 = swing
+    tp2 = entry + atr_val * (1.8 + adx_strength * 2) if ema_trend > 0 else entry - atr_val * (1.8 + adx_strength * 2)
+
+    # TP3 = trend extension
+    trend_multiplier = 3 + (adx_strength * 4) + (abs(ema_trend) * 10)
+
+    if ema_trend > 0:
+        tp3 = max(resistance, entry + atr_val * trend_multiplier)
+    else:
+        tp3 = min(support, entry - atr_val * trend_multiplier)
+
+    # STOP LOSS
+    stop = entry - atr_val * (1.2 + volatility * 5) if ema_trend > 0 else entry + atr_val * (1.2 + volatility * 5)
+
+    # TIME ESTIMATION
+    if volatility > 0.05:
+        time_est = "1 - 3 weeks"
+    elif volatility > 0.02:
+        time_est = "3 - 8 weeks"
+    else:
+        time_est = "2 - 4 months"
+
+    # PROBABILITY MODEL
+    base_conf = ai_confidence(last_d, last_w, last_m, adx_val, atr_val)
+
+    momentum_factor = min(1.2, adx_val / 25)
+    trend_factor = 1 + abs(ema_trend) * 5
+    vol_factor = 1 - min(0.5, volatility)
+
+    tp1_prob = min(0.95, base_conf * momentum_factor * vol_factor)
+    tp2_prob = min(0.90, tp1_prob * (0.85 + adx_strength))
+    tp3_prob = min(0.85, tp2_prob * (0.75 + abs(ema_trend) * 3))
 
     return {
-        "Symbol": symbol.replace(".CA",""),
-        "Confidence": round(confidence,2),
-        "Signal": signal,
+        "Score": round(score,2),
+        "Signal": "🔥 قوي جداً" if score > 85 else "🟢 قوي" if score > 70 else "⚠️ متابعة",
         "Regime": regime,
+
         "Entry": round(entry,2),
-        "SL": round(sl,2),
+        "SL": round(stop,2),
+
         "TP1": round(tp1,2),
         "TP2": round(tp2,2),
-        "ADX": round(last["adx"],2),
-        "ATR": round(atr,2),
-        "Support": round(support,2),
-        "Resistance": round(resistance,2),
-        "ML": round(ml_prob,2)
+        "TP3": round(tp3,2),
+
+        "Prob_TP1": round(tp1_prob,2),
+        "Prob_TP2": round(tp2_prob,2),
+        "Prob_TP3": round(tp3_prob,2),
+
+        "Time_Est": time_est
     }
 
 # =========================
-# 🚀 RUN ENGINE
+# PROCESSOR
 # =========================
-if st.button("🚀 RUN v8 INSTITUTIONAL ENGINE"):
+def process(symbol, daily, weekly, monthly):
+    try:
+        df_d = daily[symbol].dropna()
+        df_w = weekly[symbol].dropna()
+        df_m = monthly[symbol].dropna()
 
-    data = load_data(EGX, "1y", "1d")
+        if df_d.empty or df_w.empty or df_m.empty:
+            return None
 
-    train_ml(data)
+        result = analyze(df_d, df_w, df_m)
+        result["Symbol"] = symbol.replace(".CA","")
+        return result
+
+    except:
+        return None
+
+# =========================
+# RUN
+# =========================
+if st.button("🚀 RUN AI PRO MAX v4"):
+
+    daily = load_data(EGX, "6mo", "1d")
+    weekly = load_data(EGX, "2y", "1wk")
+    monthly = load_data(EGX, "5y", "1mo")
 
     results = []
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = [ex.submit(analyze, data[s], s) for s in data]
+        futures = [ex.submit(process, s, daily, weekly, monthly) for s in EGX]
 
         for f in futures:
             r = f.result()
@@ -234,24 +313,21 @@ if st.button("🚀 RUN v8 INSTITUTIONAL ENGINE"):
                 results.append(r)
 
     if results:
-        df = pd.DataFrame(results).sort_values("Confidence", ascending=False)
+        df = pd.DataFrame(results)
 
-        st.success("🚀 v8 ACTIVE - INSTITUTIONAL MODE")
+        df = df.sort_values("Score", ascending=False)
+
+        cols = ["Symbol"] + [c for c in df.columns if c != "Symbol"]
+        df = df[cols]
+
+        st.success("🔥 AI SYSTEM READY")
 
         st.dataframe(df, use_container_width=True)
-
-        # ================= BACKTEST =================
-        st.subheader("📊 Backtest (Quick Stats)")
-        bt = {s: simple_backtest(data[s]) for s in data}
-
-        bt_df = pd.DataFrame(bt, index=["WinRate","AvgReturn"]).T
-        st.dataframe(bt_df)
 
         st.download_button(
             "⬇️ Download",
             df.to_csv(index=False),
-            "egx_ai_v8.csv"
+            "egx_ai_pro_max_v4.csv"
         )
-
     else:
         st.warning("No signals found")
